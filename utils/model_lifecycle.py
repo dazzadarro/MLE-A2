@@ -296,7 +296,13 @@ def train_and_select_model(project_dir):
             )
 
     evaluation = pd.DataFrame(rows)
-    validation_results = evaluation[evaluation["dataset"] == "validation"].sort_values(
+    eligible_validation = evaluation[
+        (evaluation["dataset"] == "validation") & evaluation["p0_pass"]
+    ]
+    if eligible_validation.empty:
+        raise ValueError("No candidate model passed the mandatory P0 validation recall floor.")
+
+    validation_results = eligible_validation.sort_values(
         ["p0_pass", "p1_metric_value", "p0_metric_value", "p2_metric_value"],
         ascending=False,
     )
@@ -362,14 +368,28 @@ def train_and_select_model(project_dir):
         float(champion_validation["precision"]),
     )
     incumbent_rank = None
+    incumbent_current_metrics = None
     if incumbent:
-        incumbent_metrics = incumbent["performance_baseline"]
-        incumbent_rank = (
-            float(incumbent_metrics["recall"]) >= 0.70,
-            float(incumbent_metrics["pr_auc"]),
-            float(incumbent_metrics["recall"]),
-            float(incumbent_metrics["precision"]),
-        )
+        incumbent_columns = incumbent.get("feature_columns", [])
+        if incumbent_columns == feature_columns:
+            incumbent_probability = incumbent["model"].predict_proba(
+                validation[incumbent_columns]
+            )[:, 1]
+            incumbent_current_metrics = calculate_metrics(
+                validation["label"],
+                incumbent_probability,
+                incumbent["decision_threshold"],
+            )
+            incumbent_rank = (
+                float(incumbent_current_metrics["recall"]) >= 0.70,
+                float(incumbent_current_metrics["pr_auc"]),
+                float(incumbent_current_metrics["recall"]),
+                float(incumbent_current_metrics["precision"]),
+            )
+        else:
+            # A changed feature contract requires explicit review rather than
+            # comparing metrics produced from incompatible feature sets.
+            incumbent_rank = (True, float("inf"), float("inf"), float("inf"))
 
     promoted = incumbent is None or challenger_rank > incumbent_rank
     if promoted:
@@ -401,6 +421,7 @@ def train_and_select_model(project_dir):
         "latest_challenger_version": model_version,
         "latest_challenger_promoted": promoted,
         "promotion_reason": promotion_reason,
+        "incumbent_current_validation": incumbent_current_metrics,
         "training_signature": training_signature(project_dir),
         "p0_metric": "recall",
         "p1_metric": "pr_auc",

@@ -32,8 +32,15 @@ docker compose up
 
 Open `http://localhost:8082` and sign in with `admin` / `admin`.
 
-The DAG is scheduled monthly and uses `catchup=True` so historical snapshot
-months can be backfilled. Each task receives Airflow's `{{ ds }}` date.
+Airflow exposes two clear entry points:
+
+- `mle_assignment_2_pipeline`: marker-friendly manual DAG. Clicking
+  **Trigger DAG** executes the full pipeline for the latest OOT month
+  (`2025-01-01`). An alternative month can be supplied as
+  `{"snapshotdate": "YYYY-MM-DD"}`.
+- `mle_assignment_2_monthly_backfill`: paused historical DAG scheduled monthly
+  from January 2023 through January 2025 with `catchup=True`. Unpause it to
+  demonstrate chronological backfilling with Airflow's `{{ ds }}` date.
 
 ## Monitoring dashboard
 
