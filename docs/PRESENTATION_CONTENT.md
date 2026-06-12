@@ -231,6 +231,25 @@ Official marking:
 | Technical design and monitoring visualisation | 3 | Design, results and four monitoring charts exist | Strong content, deck still required |
 | Corporate-quality slideument | 2 | No final Assignment 2 PDF yet | Not yet scoreable |
 
+### Clean submission verification
+
+On 13 June 2026, commit `7d2ceb6` was exported with `git archive` into a
+new folder with no `.git`, virtual environment, or inherited Airflow database.
+The marker-style verification produced the following results:
+
+- `docker compose build`: passed;
+- `docker compose up -d`: passed;
+- Airflow metadatabase and scheduler health: passed;
+- monitoring dashboard health: passed;
+- Airflow DAG import errors: none;
+- manual `mle_assignment_2_pipeline` run: passed;
+- all six task instances completed with `success`;
+- clean end-to-end DAG duration: approximately two minutes after startup.
+
+The Docker build printed a dependency compatibility warning for Airflow's
+unused `pandas-gbq` package versus `pyarrow==10.0.1`. It did not prevent the
+image build, DAG execution, Parquet processing, or dashboard startup.
+
 ### Current score if submitted immediately
 
 The code component is approximately **5.0/5.0** based on executed tests.
@@ -241,11 +260,11 @@ approximately **5.0/10.0** overall.
 
 | Area | Projected mark | Remaining risk |
 |---|---:|---|
-| Docker/Airflow availability | 2.0/2.0 | Reconfirm from the final ZIP |
-| DAG outputs | 3.0/3.0 | Reconfirm clean manual run |
+| Docker/Airflow availability | 2.0/2.0 | Verified from a clean archived copy |
+| DAG outputs | 3.0/3.0 | Clean manual run and all task states verified |
 | Technical deck content | 2.7-3.0/3.0 | Must show actual charts and explain OOT clickstream drift |
 | Deck quality | 1.5-2.0/2.0 | Depends on visual hierarchy, legibility and restraint |
-| **Projected total** | **9.2-10.0/10.0** | Final PDF and clean-package test are still required |
+| **Projected total** | **9.2-10.0/10.0** | Final PDF, GitHub push, and final ZIP naming remain |
 
 ### Highest-value moves to close the gap
 
@@ -258,5 +277,5 @@ approximately **5.0/10.0** overall.
 6. Include a concise deployment choice and governance SOP.
 7. Create the GitHub repository named `MLE-A2`, push the committed code, and
    verify the one-line `Readme.txt` link.
-8. Extract the final ZIP into a new folder and repeat Docker build, startup and
-   manual DAG execution before submission.
+8. After the final PDF is added, create the submission ZIP from the tested Git
+   revision and perform a quick content check before uploading.
