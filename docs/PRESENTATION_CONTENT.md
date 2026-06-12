@@ -206,6 +206,7 @@ Limitations:
 | Mandatory P0 gate | Yes | Training fails if no candidate passes recall 0.70 |
 | Validation-based champion selection | Yes | Eligible models ranked by validation PR-AUC |
 | OOT excluded from selection | Yes | OOT records are reporting-only |
+| Reproducible model comparison | Yes | Chronological split, stable row order and shared seed 42 |
 | Versioned model bank | Yes | Versioned pickle plus champion pointer and JSON registry |
 | Fair incumbent/challenger comparison | Yes | Both evaluated on the current validation population |
 | Controlled automatic promotion | Yes | Code/data fingerprint and incumbent comparison |
@@ -279,3 +280,16 @@ approximately **5.0/10.0** overall.
    verify the one-line `Readme.txt` link.
 8. After the final PDF is added, create the submission ZIP from the tested Git
    revision and perform a quick content check before uploading.
+
+## Reproducibility decision
+
+The train, validation, test and OOT populations are fixed chronologically by
+`snapshot_date`; they are not randomly resampled for each model. All stochastic
+candidate algorithms use the same project seed, `42`, and each split is sorted
+by `snapshot_date` and `loan_id` before fitting and evaluation.
+
+Using a different seed for every model would make the comparison less fair
+because performance differences could come from randomisation rather than the
+algorithm. In a production model-development exercise, robustness can be tested
+separately using repeated seeds or rolling time-based backtests. The governed
+champion-selection run should remain fixed and reproducible.

@@ -24,6 +24,8 @@ from sklearn.metrics import (
 from xgboost import XGBClassifier
 
 
+RANDOM_SEED = 42
+
 ID_COLUMNS = {
     "loan_id",
     "Customer_ID",
@@ -200,6 +202,11 @@ def _json_ready(value):
 
 
 def train_and_select_model(project_dir):
+    # A shared seed and stable row order make candidate comparisons reproducible.
+    # Robustness across other seeds belongs in separate model research, not in
+    # the governed champion-selection run.
+    np.random.seed(RANDOM_SEED)
+
     project_dir = Path(project_dir)
     gold_root = project_dir / "datamart" / "gold"
     model_df = _read_parquet(gold_root / "model_feature_store")
@@ -207,10 +214,27 @@ def train_and_select_model(project_dir):
     modelling = model_df.merge(labels, on="loan_id", how="inner")
     feature_columns = _model_columns(modelling)
 
-    train = modelling[modelling["data_split"] == "train"].copy()
-    validation = modelling[modelling["data_split"] == "validation"].copy()
-    test = modelling[modelling["data_split"] == "test"].copy()
-    oot = modelling[modelling["data_split"] == "oot"].copy()
+    split_sort_columns = ["snapshot_date", "loan_id"]
+    train = (
+        modelling[modelling["data_split"] == "train"]
+        .sort_values(split_sort_columns)
+        .reset_index(drop=True)
+    )
+    validation = (
+        modelling[modelling["data_split"] == "validation"]
+        .sort_values(split_sort_columns)
+        .reset_index(drop=True)
+    )
+    test = (
+        modelling[modelling["data_split"] == "test"]
+        .sort_values(split_sort_columns)
+        .reset_index(drop=True)
+    )
+    oot = (
+        modelling[modelling["data_split"] == "oot"]
+        .sort_values(split_sort_columns)
+        .reset_index(drop=True)
+    )
     if train.empty or validation.empty or test.empty or oot.empty:
         raise ValueError("Train, validation, test and OOT rows are required before model training.")
 
@@ -221,22 +245,22 @@ def train_and_select_model(project_dir):
         "logistic_regression": LogisticRegression(
             class_weight="balanced",
             max_iter=1000,
-            random_state=42,
+            random_state=RANDOM_SEED,
         ),
         "random_forest": RandomForestClassifier(
             n_estimators=200,
             max_depth=10,
             min_samples_leaf=5,
             class_weight="balanced",
-            random_state=42,
-            n_jobs=-1,
+            random_state=RANDOM_SEED,
+            n_jobs=1,
         ),
         "hist_gradient_boosting": HistGradientBoostingClassifier(
             learning_rate=0.08,
             max_iter=180,
             max_leaf_nodes=24,
             l2_regularization=0.1,
-            random_state=42,
+            random_state=RANDOM_SEED,
         ),
         "xgboost": XGBClassifier(
             n_estimators=250,
@@ -246,8 +270,8 @@ def train_and_select_model(project_dir):
             colsample_bytree=0.85,
             scale_pos_weight=imbalance_ratio,
             eval_metric="logloss",
-            random_state=42,
-            n_jobs=-1,
+            random_state=RANDOM_SEED,
+            n_jobs=1,
             tree_method="hist",
             use_label_encoder=False,
         ),
@@ -328,6 +352,7 @@ def train_and_select_model(project_dir):
         "model_name": champion_name,
         "model_version": model_version,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "random_seed": RANDOM_SEED,
         "model": champion_model,
         "decision_threshold": float(champion_threshold),
         "feature_columns": feature_columns,
@@ -422,6 +447,7 @@ def train_and_select_model(project_dir):
         "latest_challenger_promoted": promoted,
         "promotion_reason": promotion_reason,
         "incumbent_current_validation": incumbent_current_metrics,
+        "random_seed": RANDOM_SEED,
         "training_signature": training_signature(project_dir),
         "p0_metric": "recall",
         "p1_metric": "pr_auc",
