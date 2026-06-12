@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import pickle
@@ -58,6 +59,26 @@ RAW_NUMERIC_COLUMNS = {
     "Loan_to_Income_Ratio",
     *{f"fe_{i}" for i in range(1, 21)},
 }
+
+
+def training_signature(project_dir):
+    """Fingerprint model code and training inputs for controlled refresh detection."""
+    project_dir = Path(project_dir)
+    digest = hashlib.sha256()
+    digest.update(Path(__file__).resolve().read_bytes())
+    for root in [
+        project_dir / "datamart" / "gold" / "model_feature_store",
+        project_dir / "datamart" / "gold" / "label_store",
+    ]:
+        files = (
+            item
+            for item in root.rglob("*")
+            if item.is_file() and not item.name.endswith(".crc")
+        )
+        for path in sorted(files):
+            digest.update(str(path.relative_to(project_dir)).encode("utf-8"))
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def _read_parquet(path):
@@ -327,21 +348,67 @@ def train_and_select_model(project_dir):
     versioned_path = model_bank / f"{champion_name}_{model_version}.pkl"
     with versioned_path.open("wb") as file:
         pickle.dump(artefact, file)
-    with (model_bank / "champion_model.pkl").open("wb") as file:
-        pickle.dump(artefact, file)
+
+    champion_path = model_bank / "champion_model.pkl"
+    incumbent = None
+    if champion_path.exists():
+        with champion_path.open("rb") as file:
+            incumbent = pickle.load(file)
+
+    challenger_rank = (
+        float(champion_validation["recall"]) >= 0.70,
+        float(champion_validation["pr_auc"]),
+        float(champion_validation["recall"]),
+        float(champion_validation["precision"]),
+    )
+    incumbent_rank = None
+    if incumbent:
+        incumbent_metrics = incumbent["performance_baseline"]
+        incumbent_rank = (
+            float(incumbent_metrics["recall"]) >= 0.70,
+            float(incumbent_metrics["pr_auc"]),
+            float(incumbent_metrics["recall"]),
+            float(incumbent_metrics["precision"]),
+        )
+
+    promoted = incumbent is None or challenger_rank > incumbent_rank
+    if promoted:
+        with champion_path.open("wb") as file:
+            pickle.dump(artefact, file)
+        deployed = artefact
+        promotion_reason = (
+            "Initial champion created."
+            if incumbent is None
+            else "Challenger passed P0 and ranked above the incumbent on validation metrics."
+        )
+    else:
+        deployed = incumbent
+        promotion_reason = (
+            "Challenger retained as a versioned artefact; incumbent remained superior "
+            "under the P0 then P1 promotion rule."
+        )
 
     registry = {
-        "champion_model": champion_name,
-        "model_version": model_version,
-        "artefact_path": versioned_path.name,
-        "decision_threshold": float(champion_threshold),
+        "champion_model": deployed["model_name"],
+        "model_version": deployed["model_version"],
+        "artefact_path": (
+            versioned_path.name
+            if promoted
+            else f"{deployed['model_name']}_{deployed['model_version']}.pkl"
+        ),
+        "decision_threshold": float(deployed["decision_threshold"]),
+        "latest_challenger_model": champion_name,
+        "latest_challenger_version": model_version,
+        "latest_challenger_promoted": promoted,
+        "promotion_reason": promotion_reason,
+        "training_signature": training_signature(project_dir),
         "p0_metric": "recall",
         "p1_metric": "pr_auc",
         "p2_metric": "precision",
         "p3_metric": "roc_auc",
         "selection_rule": (
             "Pass the validation recall floor of 0.70, then maximise PR-AUC; "
-            "use recall and precision as tie-breakers."
+            "use recall and precision as tie-breakers. OOT is reporting-only."
         ),
     }
     (model_bank / "model_registry.json").write_text(
@@ -349,8 +416,11 @@ def train_and_select_model(project_dir):
         encoding="utf-8",
     )
     _write_parquet(evaluation, gold_root / "model_evaluation")
-    print(f"Champion model: {champion_name} ({model_version})")
-    return artefact
+    print(
+        f"Champion model: {deployed['model_name']} ({deployed['model_version']}); "
+        f"challenger promoted={promoted}"
+    )
+    return deployed
 
 
 def load_champion(project_dir):
@@ -418,6 +488,7 @@ def calculate_monthly_monitoring(project_dir, snapshot_date=None):
     feature_drift_rows = []
     for month, month_predictions in predictions.groupby("snapshot_date"):
         month_labelled = labelled[labelled["snapshot_date"] == month].dropna(subset=["label"])
+        data_split = str(month_predictions["data_split"].iloc[0])
         probability = month_predictions["default_probability"].to_numpy()
         score_actual = _distribution(probability, artefact["score_baseline"]["edges"])
         psi = _stability_index(artefact["score_baseline"]["distribution"], score_actual)
@@ -429,9 +500,15 @@ def calculate_monthly_monitoring(project_dir, snapshot_date=None):
             "recall": float("nan"),
             "f1_score": float("nan"),
         }
-        observation_status = "labels_pending"
-        performance_drift_status = "labels_pending"
-        if not month_labelled.empty and month_labelled["label"].nunique() >= 2:
+        observation_status = "in_sample_reference" if data_split == "train" else "labels_pending"
+        performance_drift_status = observation_status
+        # Training months are useful PSI/CSI baselines, but their in-sample
+        # performance is not presented as evidence of generalisation.
+        if (
+            data_split != "train"
+            and not month_labelled.empty
+            and month_labelled["label"].nunique() >= 2
+        ):
             metrics = calculate_metrics(
                 month_labelled["label"].astype(int),
                 month_labelled["default_probability"],
@@ -452,7 +529,7 @@ def calculate_monthly_monitoring(project_dir, snapshot_date=None):
         data_drift_status = _drift_status(psi)
         combined_status = (
             data_drift_status
-            if performance_drift_status == "labels_pending"
+            if performance_drift_status in {"labels_pending", "in_sample_reference"}
             else _worst_status(data_drift_status, performance_drift_status)
         )
 
@@ -461,6 +538,7 @@ def calculate_monthly_monitoring(project_dir, snapshot_date=None):
                 "snapshot_date": month,
                 "model_name": artefact["model_name"],
                 "model_version": artefact["model_version"],
+                "data_split": data_split,
                 "observation_status": observation_status,
                 "record_count": len(month_predictions),
                 "labelled_record_count": len(month_labelled),

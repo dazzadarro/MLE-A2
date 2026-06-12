@@ -26,6 +26,27 @@ Histogram Gradient Boosting is the champion because it passed the P0 recall
 floor and achieved the highest validation PR-AUC. XGBoost performed strongly on
 OOT, but OOT was deliberately not used for champion selection.
 
+The earlier dashboard view showing recall close to 1.00 came from months inside
+the training window. Those values were in-sample and therefore not valid
+evidence of generalisation. The monitoring output now suppresses train-period
+P0/P1 and reports performance only for validation, test and OOT months:
+validation recall is 0.736, test recall is 0.753 and OOT recall is 0.723.
+
+## Automated but governed champion promotion
+
+1. Airflow fingerprints the model code and Gold training inputs.
+2. Unchanged inputs reuse the current champion, avoiding needless retraining
+   during monthly backfills.
+3. Changed code or data triggers all four challengers to be trained and
+   evaluated again.
+4. A challenger is promoted only if it passes P0 recall and outranks the
+   incumbent on validation PR-AUC, with recall and precision as tie-breakers.
+5. The versioned artefact and decision are recorded in `model_registry.json`;
+   inference always retrieves the governed `champion_model.pkl` pointer.
+
+Simply adding a model file does not deploy it. Promotion occurs only through
+the evaluation gate, and OOT results remain reporting-only.
+
 ## Metric hierarchy
 
 | Priority | Metric | Decision role |

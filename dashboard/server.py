@@ -45,7 +45,7 @@ def _records(df):
     for column in output.columns:
         if "date" in column:
             output[column] = pd.to_datetime(output[column], errors="coerce").dt.strftime("%Y-%m-%d")
-    output = output.where(pd.notnull(output), None)
+    output = output.astype(object).where(pd.notnull(output), None)
     return output.to_dict(orient="records")
 
 
@@ -107,7 +107,7 @@ def dashboard_payload(params):
         "prediction_count": prediction_count or int(latest.get("record_count", 0)),
         "p0_name": latest.get("p0_metric_name", "recall"),
         "p0_value": _clean_number(latest.get("p0_metric_value")),
-        "p1_name": latest.get("p1_metric_name", "roc_auc"),
+        "p1_name": latest.get("p1_metric_name", "pr_auc"),
         "p1_value": _clean_number(latest.get("p1_metric_value")),
         "psi": _clean_number(latest.get("psi")),
         "predicted_default_rate": _clean_number(latest.get("predicted_default_rate")),
@@ -120,6 +120,7 @@ def dashboard_payload(params):
 
     performance_columns = [
         "snapshot_date",
+        "data_split",
         "p0_metric_value",
         "p1_metric_value",
         "precision",
