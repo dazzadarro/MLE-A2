@@ -1,0 +1,11 @@
+{
+  "champion_model": "hist_gradient_boosting",
+  "model_version": "20260612T131630Z",
+  "artefact_path": "hist_gradient_boosting_20260612T131630Z.pkl",
+  "decision_threshold": 0.42000000000000004,
+  "p0_metric": "recall",
+  "p1_metric": "pr_auc",
+  "p2_metric": "precision",
+  "p3_metric": "roc_auc",
+  "selection_rule": "Pass the validation recall floor of 0.70, then maximise PR-AUC; use recall and precision as tie-breakers."
+}

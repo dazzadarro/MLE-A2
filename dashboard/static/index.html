@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loan Model Monitoring</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">CS611 ASSIGNMENT 2</p>
+        <h1>Loan Default Model Monitoring</h1>
+        <p class="subtitle">Monthly performance, population stability and feature drift</p>
+      </div>
+      <div class="header-controls">
+        <label for="month">Snapshot month</label>
+        <select id="month"></select>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="emptyState" class="empty-state" hidden></section>
+
+      <section id="dashboard" hidden>
+        <div class="status-strip">
+          <div>
+            <span>Champion model</span>
+            <strong id="modelName">-</strong>
+          </div>
+          <div>
+            <span>Model version</span>
+            <strong id="modelVersion">-</strong>
+          </div>
+          <div>
+            <span>Labels</span>
+            <strong id="labelStatus">-</strong>
+          </div>
+          <div>
+            <span>Data drift</span>
+            <strong id="dataDriftStatus">-</strong>
+          </div>
+          <div>
+            <span>Performance drift</span>
+            <strong id="performanceDriftStatus">-</strong>
+          </div>
+          <div>
+            <span>Monitoring status</span>
+            <strong id="monitoringStatus" class="status">-</strong>
+          </div>
+        </div>
+
+        <section class="kpi-grid">
+          <article class="kpi">
+            <span id="p0Label">P0 Recall</span>
+            <strong id="p0Value">-</strong>
+            <small>Primary business-risk metric</small>
+          </article>
+          <article class="kpi">
+            <span id="p1Label">P1 ROC-AUC</span>
+            <strong id="p1Value">-</strong>
+            <small>Threshold-independent ranking</small>
+          </article>
+          <article class="kpi">
+            <span>Population Stability Index</span>
+            <strong id="psiValue">-</strong>
+            <small id="psiInterpretation">Overall score drift</small>
+          </article>
+          <article class="kpi">
+            <span>Loans scored</span>
+            <strong id="predictionCount">-</strong>
+            <small>Selected snapshot month</small>
+          </article>
+          <article class="kpi">
+            <span>Predicted default rate</span>
+            <strong id="predictedRate">-</strong>
+            <small>Champion model decisions</small>
+          </article>
+          <article class="kpi">
+            <span>Observed default rate</span>
+            <strong id="observedRate">-</strong>
+            <small>MOB 6 matured outcomes</small>
+          </article>
+        </section>
+
+        <section class="monitor-grid">
+          <article class="panel performance-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">PERFORMANCE</p>
+                <h2>P0 and P1 across time</h2>
+              </div>
+              <div class="legend">
+                <span><i class="blue"></i>P0 Recall</span>
+                <span><i class="green"></i>P1 PR-AUC</span>
+              </div>
+            </div>
+            <canvas id="performanceChart" width="900" height="300"></canvas>
+          </article>
+
+          <article class="panel psi-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">STABILITY</p>
+                <h2>PSI across time</h2>
+              </div>
+              <div class="threshold-key">0.10 watch · 0.25 significant</div>
+            </div>
+            <canvas id="psiChart" width="900" height="300"></canvas>
+          </article>
+
+          <article class="panel drift-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">COVARIATE SHIFT</p>
+                <h2>Feature-level CSI</h2>
+              </div>
+              <div class="drift-counts">
+                <span><b id="watchCount">0</b> watch</span>
+                <span><b id="significantCount">0</b> significant</span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Feature</th>
+                    <th>CSI</th>
+                    <th>Status</th>
+                    <th>Baseline mean</th>
+                    <th>Current mean</th>
+                  </tr>
+                </thead>
+                <tbody id="driftRows"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <aside class="panel governance-panel">
+            <p class="eyebrow">GOVERNANCE</p>
+            <h2>Decision rules</h2>
+            <div class="rule stable">
+              <strong>Stable</strong>
+              <span>PSI/CSI below 0.10</span>
+              <small>Continue normal monitoring</small>
+            </div>
+            <div class="rule watch">
+              <strong>Watch</strong>
+              <span>PSI/CSI 0.10–0.25</span>
+              <small>Investigate affected population or features</small>
+            </div>
+            <div class="rule alert">
+              <strong>Significant drift</strong>
+              <span>PSI/CSI above 0.25</span>
+              <small>Escalate; assess recalibration or retraining</small>
+            </div>
+            <p class="governance-note">
+              Retraining requires sustained drift or degraded P0/P1 performance.
+              A single breach initiates investigation, not automatic replacement.
+            </p>
+          </aside>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
