@@ -1,24 +1,22 @@
 {
-  "champion_model": "hist_gradient_boosting",
-  "model_version": "20260612T131630Z",
-  "artefact_path": "hist_gradient_boosting_20260612T131630Z.pkl",
+  "champion_model": "hist_gradient_boosting_balanced",
+  "champion_model_family": "hist_gradient_boosting",
+  "model_version": "20260614T130501Z",
+  "artefact_path": "hist_gradient_boosting_balanced_20260614T130501Z.pkl",
   "decision_threshold": 0.42000000000000004,
-  "latest_challenger_model": "hist_gradient_boosting",
-  "latest_challenger_version": "20260612T171601Z",
-  "latest_challenger_promoted": false,
-  "promotion_reason": "Challenger retained as a versioned artefact; incumbent remained superior under the P0 then P1 promotion rule.",
-  "incumbent_current_validation": {
-    "roc_auc": 0.7986995593191047,
-    "pr_auc": 0.6540419230181616,
-    "precision": 0.58679706601467,
-    "recall": 0.7361963190184049,
-    "f1_score": 0.6530612244897959
-  },
+  "latest_challenger_model": "hist_gradient_boosting_balanced",
+  "latest_challenger_family": "hist_gradient_boosting",
+  "latest_challenger_version": "20260614T130501Z",
+  "latest_challenger_promoted": true,
+  "promotion_reason": "Challenger passed P0 and ranked above the incumbent on validation metrics.",
+  "candidate_count": 12,
+  "model_family_count": 4,
+  "incumbent_current_validation": null,
   "random_seed": 42,
-  "training_signature": "e2bfabb6aeff6efc08cc45c5a231abbe7941eadb763cd3c4d370201162d5457d",
+  "training_signature": "99f0b866823047385a45eff82cf29e803008f4a315e82e3be4fa1b35aab7b858",
   "p0_metric": "recall",
   "p1_metric": "pr_auc",
   "p2_metric": "precision",
   "p3_metric": "roc_auc",
-  "selection_rule": "Pass the validation recall floor of 0.70, then maximise PR-AUC; use recall and precision as tie-breakers. OOT is reporting-only."
+  "selection_rule": "Pass the validation recall floor of 0.70, then maximise a simplicity-adjusted validation PR-AUC governance score; use raw PR-AUC, recall and precision as tie-breakers. OOT is reporting-only."
 }

@@ -3,6 +3,7 @@ import json
 import math
 import pickle
 import shutil
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from xgboost import XGBClassifier
 
 
 RANDOM_SEED = 42
+P0_RECALL_FLOOR = 0.70
+SIMPLICITY_PENALTY = 0.005
 
 ID_COLUMNS = {
     "loan_id",
@@ -201,6 +204,191 @@ def _json_ready(value):
     return value
 
 
+def _candidate_specs(imbalance_ratio):
+    """Return a compact, production-style candidate set across model families."""
+    return [
+        {
+            "model_name": "logistic_regression_c0_3",
+            "model_family": "logistic_regression",
+            "simplicity_tier": 1,
+            "hyperparameters": {"C": 0.3, "class_weight": "balanced"},
+            "model": LogisticRegression(
+                C=0.3,
+                class_weight="balanced",
+                max_iter=1000,
+                random_state=RANDOM_SEED,
+            ),
+        },
+        {
+            "model_name": "logistic_regression_c1_0",
+            "model_family": "logistic_regression",
+            "simplicity_tier": 1,
+            "hyperparameters": {"C": 1.0, "class_weight": "balanced"},
+            "model": LogisticRegression(
+                C=1.0,
+                class_weight="balanced",
+                max_iter=1000,
+                random_state=RANDOM_SEED,
+            ),
+        },
+        {
+            "model_name": "logistic_regression_c3_0",
+            "model_family": "logistic_regression",
+            "simplicity_tier": 1,
+            "hyperparameters": {"C": 3.0, "class_weight": "balanced"},
+            "model": LogisticRegression(
+                C=3.0,
+                class_weight="balanced",
+                max_iter=1000,
+                random_state=RANDOM_SEED,
+            ),
+        },
+        {
+            "model_name": "random_forest_depth8_leaf10",
+            "model_family": "random_forest",
+            "simplicity_tier": 2,
+            "hyperparameters": {"n_estimators": 160, "max_depth": 8, "min_samples_leaf": 10},
+            "model": RandomForestClassifier(
+                n_estimators=160,
+                max_depth=8,
+                min_samples_leaf=10,
+                class_weight="balanced",
+                random_state=RANDOM_SEED,
+                n_jobs=1,
+            ),
+        },
+        {
+            "model_name": "random_forest_depth10_leaf5",
+            "model_family": "random_forest",
+            "simplicity_tier": 2,
+            "hyperparameters": {"n_estimators": 200, "max_depth": 10, "min_samples_leaf": 5},
+            "model": RandomForestClassifier(
+                n_estimators=200,
+                max_depth=10,
+                min_samples_leaf=5,
+                class_weight="balanced",
+                random_state=RANDOM_SEED,
+                n_jobs=1,
+            ),
+        },
+        {
+            "model_name": "random_forest_depth12_leaf5",
+            "model_family": "random_forest",
+            "simplicity_tier": 2,
+            "hyperparameters": {"n_estimators": 220, "max_depth": 12, "min_samples_leaf": 5},
+            "model": RandomForestClassifier(
+                n_estimators=220,
+                max_depth=12,
+                min_samples_leaf=5,
+                class_weight="balanced",
+                random_state=RANDOM_SEED,
+                n_jobs=1,
+            ),
+        },
+        {
+            "model_name": "hist_gradient_boosting_compact",
+            "model_family": "hist_gradient_boosting",
+            "simplicity_tier": 3,
+            "hyperparameters": {"learning_rate": 0.08, "max_iter": 140, "max_leaf_nodes": 16},
+            "model": HistGradientBoostingClassifier(
+                learning_rate=0.08,
+                max_iter=140,
+                max_leaf_nodes=16,
+                l2_regularization=0.1,
+                random_state=RANDOM_SEED,
+            ),
+        },
+        {
+            "model_name": "hist_gradient_boosting_balanced",
+            "model_family": "hist_gradient_boosting",
+            "simplicity_tier": 3,
+            "hyperparameters": {"learning_rate": 0.08, "max_iter": 180, "max_leaf_nodes": 24},
+            "model": HistGradientBoostingClassifier(
+                learning_rate=0.08,
+                max_iter=180,
+                max_leaf_nodes=24,
+                l2_regularization=0.1,
+                random_state=RANDOM_SEED,
+            ),
+        },
+        {
+            "model_name": "hist_gradient_boosting_deeper",
+            "model_family": "hist_gradient_boosting",
+            "simplicity_tier": 3,
+            "hyperparameters": {"learning_rate": 0.05, "max_iter": 240, "max_leaf_nodes": 31},
+            "model": HistGradientBoostingClassifier(
+                learning_rate=0.05,
+                max_iter=240,
+                max_leaf_nodes=31,
+                l2_regularization=0.1,
+                random_state=RANDOM_SEED,
+            ),
+        },
+        {
+            "model_name": "xgboost_depth3_lr0_05",
+            "model_family": "xgboost",
+            "simplicity_tier": 4,
+            "hyperparameters": {"n_estimators": 220, "max_depth": 3, "learning_rate": 0.05},
+            "model": XGBClassifier(
+                n_estimators=220,
+                max_depth=3,
+                learning_rate=0.05,
+                subsample=0.85,
+                colsample_bytree=0.85,
+                scale_pos_weight=imbalance_ratio,
+                eval_metric="logloss",
+                random_state=RANDOM_SEED,
+                n_jobs=1,
+                tree_method="hist",
+                use_label_encoder=False,
+            ),
+        },
+        {
+            "model_name": "xgboost_depth4_lr0_05",
+            "model_family": "xgboost",
+            "simplicity_tier": 4,
+            "hyperparameters": {"n_estimators": 250, "max_depth": 4, "learning_rate": 0.05},
+            "model": XGBClassifier(
+                n_estimators=250,
+                max_depth=4,
+                learning_rate=0.05,
+                subsample=0.85,
+                colsample_bytree=0.85,
+                scale_pos_weight=imbalance_ratio,
+                eval_metric="logloss",
+                random_state=RANDOM_SEED,
+                n_jobs=1,
+                tree_method="hist",
+                use_label_encoder=False,
+            ),
+        },
+        {
+            "model_name": "xgboost_depth4_lr0_03",
+            "model_family": "xgboost",
+            "simplicity_tier": 4,
+            "hyperparameters": {"n_estimators": 320, "max_depth": 4, "learning_rate": 0.03},
+            "model": XGBClassifier(
+                n_estimators=320,
+                max_depth=4,
+                learning_rate=0.03,
+                subsample=0.85,
+                colsample_bytree=0.85,
+                scale_pos_weight=imbalance_ratio,
+                eval_metric="logloss",
+                random_state=RANDOM_SEED,
+                n_jobs=1,
+                tree_method="hist",
+                use_label_encoder=False,
+            ),
+        },
+    ]
+
+
+def _governance_score(metrics, simplicity_tier):
+    """Small simplicity penalty breaks close performance ties without overriding P0."""
+    return float(metrics["pr_auc"] - SIMPLICITY_PENALTY * (simplicity_tier - 1))
+
+
 def train_and_select_model(project_dir):
     # A shared seed and stable row order make candidate comparisons reproducible.
     # Robustness across other seeds belongs in separate model research, not in
@@ -241,46 +429,18 @@ def train_and_select_model(project_dir):
     negative_count = int((train["label"] == 0).sum())
     positive_count = int((train["label"] == 1).sum())
     imbalance_ratio = negative_count / max(positive_count, 1)
-    candidates = {
-        "logistic_regression": LogisticRegression(
-            class_weight="balanced",
-            max_iter=1000,
-            random_state=RANDOM_SEED,
-        ),
-        "random_forest": RandomForestClassifier(
-            n_estimators=200,
-            max_depth=10,
-            min_samples_leaf=5,
-            class_weight="balanced",
-            random_state=RANDOM_SEED,
-            n_jobs=1,
-        ),
-        "hist_gradient_boosting": HistGradientBoostingClassifier(
-            learning_rate=0.08,
-            max_iter=180,
-            max_leaf_nodes=24,
-            l2_regularization=0.1,
-            random_state=RANDOM_SEED,
-        ),
-        "xgboost": XGBClassifier(
-            n_estimators=250,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.85,
-            colsample_bytree=0.85,
-            scale_pos_weight=imbalance_ratio,
-            eval_metric="logloss",
-            random_state=RANDOM_SEED,
-            n_jobs=1,
-            tree_method="hist",
-            use_label_encoder=False,
-        ),
-    }
+    candidates = _candidate_specs(imbalance_ratio)
 
     rows = []
     fitted = {}
-    for model_name, model in candidates.items():
-        if model_name == "hist_gradient_boosting":
+    candidate_metadata = {}
+    for candidate in candidates:
+        model_name = candidate["model_name"]
+        model_family = candidate["model_family"]
+        simplicity_tier = candidate["simplicity_tier"]
+        hyperparameters = candidate["hyperparameters"]
+        model = candidate["model"]
+        if model_family == "hist_gradient_boosting":
             sample_weight = np.where(train["label"].to_numpy() == 1, imbalance_ratio, 1.0)
             model.fit(train[feature_columns], train["label"], sample_weight=sample_weight)
         else:
@@ -291,6 +451,11 @@ def train_and_select_model(project_dir):
         test_probability = model.predict_proba(test[feature_columns])[:, 1]
         test_metrics = calculate_metrics(test["label"], test_probability, threshold)
         fitted[model_name] = (model, threshold)
+        candidate_metadata[model_name] = {
+            "model_family": model_family,
+            "simplicity_tier": simplicity_tier,
+            "hyperparameters": hyperparameters,
+        }
 
         oot_probability = model.predict_proba(oot[feature_columns])[:, 1]
         oot_metrics = calculate_metrics(oot["label"], oot_probability, threshold)
@@ -302,18 +467,23 @@ def train_and_select_model(project_dir):
             rows.append(
                 {
                     "model_name": model_name,
+                    "model_family": model_family,
                     "dataset": dataset_name,
                     "decision_threshold": threshold,
                     "p0_metric_name": "recall",
                     "p0_metric_value": metrics["recall"],
-                    "p0_minimum": 0.70,
-                    "p0_pass": metrics["recall"] >= 0.70,
+                    "p0_minimum": P0_RECALL_FLOOR,
+                    "p0_pass": metrics["recall"] >= P0_RECALL_FLOOR,
                     "p1_metric_name": "pr_auc",
                     "p1_metric_value": metrics["pr_auc"],
                     "p2_metric_name": "precision",
                     "p2_metric_value": metrics["precision"],
                     "p3_metric_name": "roc_auc",
                     "p3_metric_value": metrics["roc_auc"],
+                    "simplicity_tier": simplicity_tier,
+                    "simplicity_penalty": SIMPLICITY_PENALTY * (simplicity_tier - 1),
+                    "governance_score": _governance_score(metrics, simplicity_tier),
+                    "hyperparameters": json.dumps(hyperparameters, sort_keys=True),
                     "used_for_champion_selection": dataset_name == "validation",
                     **metrics,
                 }
@@ -327,12 +497,13 @@ def train_and_select_model(project_dir):
         raise ValueError("No candidate model passed the mandatory P0 validation recall floor.")
 
     validation_results = eligible_validation.sort_values(
-        ["p0_pass", "p1_metric_value", "p0_metric_value", "p2_metric_value"],
+        ["governance_score", "p1_metric_value", "p0_metric_value", "p2_metric_value"],
         ascending=False,
     )
     champion_name = validation_results.iloc[0]["model_name"]
     champion_model, champion_threshold = fitted[champion_name]
     champion_validation = validation_results.iloc[0]
+    champion_metadata = candidate_metadata[champion_name]
     model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     training_probabilities = champion_model.predict_proba(train[feature_columns])[:, 1]
@@ -350,9 +521,13 @@ def train_and_select_model(project_dir):
 
     artefact = {
         "model_name": champion_name,
+        "model_family": champion_metadata["model_family"],
         "model_version": model_version,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "random_seed": RANDOM_SEED,
+        "hyperparameters": deepcopy(champion_metadata["hyperparameters"]),
+        "simplicity_tier": int(champion_metadata["simplicity_tier"]),
+        "governance_score": float(champion_validation["governance_score"]),
         "model": champion_model,
         "decision_threshold": float(champion_threshold),
         "feature_columns": feature_columns,
@@ -387,7 +562,8 @@ def train_and_select_model(project_dir):
             incumbent = pickle.load(file)
 
     challenger_rank = (
-        float(champion_validation["recall"]) >= 0.70,
+        float(champion_validation["recall"]) >= P0_RECALL_FLOOR,
+        float(champion_validation["governance_score"]),
         float(champion_validation["pr_auc"]),
         float(champion_validation["recall"]),
         float(champion_validation["precision"]),
@@ -397,20 +573,29 @@ def train_and_select_model(project_dir):
     if incumbent:
         incumbent_columns = incumbent.get("feature_columns", [])
         if incumbent_columns == feature_columns:
-            incumbent_probability = incumbent["model"].predict_proba(
-                validation[incumbent_columns]
-            )[:, 1]
-            incumbent_current_metrics = calculate_metrics(
-                validation["label"],
-                incumbent_probability,
-                incumbent["decision_threshold"],
-            )
-            incumbent_rank = (
-                float(incumbent_current_metrics["recall"]) >= 0.70,
-                float(incumbent_current_metrics["pr_auc"]),
-                float(incumbent_current_metrics["recall"]),
-                float(incumbent_current_metrics["precision"]),
-            )
+            if "model_family" not in incumbent or "governance_score" not in incumbent:
+                # Promote the best current candidate when the incumbent was
+                # created before richer governance metadata was introduced.
+                incumbent_rank = (False, float("-inf"), float("-inf"), float("-inf"), float("-inf"))
+            else:
+                incumbent_probability = incumbent["model"].predict_proba(
+                    validation[incumbent_columns]
+                )[:, 1]
+                incumbent_current_metrics = calculate_metrics(
+                    validation["label"],
+                    incumbent_probability,
+                    incumbent["decision_threshold"],
+                )
+                incumbent_rank = (
+                    float(incumbent_current_metrics["recall"]) >= P0_RECALL_FLOOR,
+                    _governance_score(
+                        incumbent_current_metrics,
+                        int(incumbent.get("simplicity_tier", 3)),
+                    ),
+                    float(incumbent_current_metrics["pr_auc"]),
+                    float(incumbent_current_metrics["recall"]),
+                    float(incumbent_current_metrics["precision"]),
+                )
         else:
             # A changed feature contract requires explicit review rather than
             # comparing metrics produced from incompatible feature sets.
@@ -435,6 +620,7 @@ def train_and_select_model(project_dir):
 
     registry = {
         "champion_model": deployed["model_name"],
+        "champion_model_family": deployed.get("model_family", deployed["model_name"]),
         "model_version": deployed["model_version"],
         "artefact_path": (
             versioned_path.name
@@ -443,9 +629,12 @@ def train_and_select_model(project_dir):
         ),
         "decision_threshold": float(deployed["decision_threshold"]),
         "latest_challenger_model": champion_name,
+        "latest_challenger_family": champion_metadata["model_family"],
         "latest_challenger_version": model_version,
         "latest_challenger_promoted": promoted,
         "promotion_reason": promotion_reason,
+        "candidate_count": len(candidates),
+        "model_family_count": len({candidate["model_family"] for candidate in candidates}),
         "incumbent_current_validation": incumbent_current_metrics,
         "random_seed": RANDOM_SEED,
         "training_signature": training_signature(project_dir),
@@ -454,8 +643,9 @@ def train_and_select_model(project_dir):
         "p2_metric": "precision",
         "p3_metric": "roc_auc",
         "selection_rule": (
-            "Pass the validation recall floor of 0.70, then maximise PR-AUC; "
-            "use recall and precision as tie-breakers. OOT is reporting-only."
+            "Pass the validation recall floor of 0.70, then maximise a simplicity-adjusted "
+            "validation PR-AUC governance score; use raw PR-AUC, recall and precision as "
+            "tie-breakers. OOT is reporting-only."
         ),
     }
     (model_bank / "model_registry.json").write_text(
