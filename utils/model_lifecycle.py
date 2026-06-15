@@ -443,6 +443,61 @@ def _governance_score(metrics, simplicity_tier, feature_count):
     )
 
 
+def create_model_selection_charts(project_dir, evaluation):
+    chart_root = Path(project_dir) / "model_selection_charts"
+    chart_root.mkdir(parents=True, exist_ok=True)
+
+    validation = evaluation[(evaluation["dataset"] == "validation") & evaluation["p0_pass"]].copy()
+    if validation.empty:
+        return
+
+    by_budget = (
+        validation.sort_values("governance_score", ascending=False)
+        .groupby("feature_count", as_index=False)
+        .first()
+        .sort_values("feature_count")
+    )
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.plot(
+        by_budget["feature_count"],
+        by_budget["pr_auc"],
+        marker="o",
+        linewidth=2,
+        label="Validation PR-AUC",
+    )
+    ax.plot(
+        by_budget["feature_count"],
+        by_budget["governance_score"],
+        marker="o",
+        linewidth=2,
+        label="Governance score",
+    )
+    for _, row in by_budget.iterrows():
+        label = str(row["feature_set_name"]).replace("_features", "").replace("_", " ")
+        ax.annotate(
+            label,
+            (row["feature_count"], row["governance_score"]),
+            textcoords="offset points",
+            xytext=(0, -18),
+            ha="center",
+            fontsize=8,
+        )
+    ax.set_title("Feature-count elbow: validation performance versus complexity")
+    ax.set_xlabel("Number of selected model features")
+    ax.set_ylabel("Score")
+    ax.set_ylim(
+        max(0.0, min(by_budget["governance_score"].min(), by_budget["pr_auc"].min()) - 0.03),
+        min(1.0, max(by_budget["governance_score"].max(), by_budget["pr_auc"].max()) + 0.03),
+    )
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(chart_root / "feature_elbow.png", dpi=160)
+    plt.close(fig)
+
+
 def train_and_select_model(project_dir):
     # A shared seed and stable row order make candidate comparisons reproducible.
     # Robustness across other seeds belongs in separate model research, not in
@@ -727,6 +782,7 @@ def train_and_select_model(project_dir):
         encoding="utf-8",
     )
     _write_parquet(evaluation, gold_root / "model_evaluation")
+    create_model_selection_charts(project_dir, evaluation)
     print(
         f"Champion model: {deployed['model_name']} ({deployed['model_version']}); "
         f"challenger promoted={promoted}"

@@ -21,6 +21,7 @@ The command creates:
 - `datamart/gold/model_monitoring`
 - `datamart/gold/feature_drift_monitoring`
 - `model_bank`: versioned and champion model artefacts
+- `model_selection_charts`: feature-count elbow chart for model-selection governance
 - `monitoring_charts`: P0/P1, PSI, CSI and default-rate charts
 
 ## Airflow
@@ -100,3 +101,8 @@ model code and Gold training inputs, so unchanged backfills reuse the current
 champion while updated code or data triggers controlled challenger evaluation.
 Inference never selects an arbitrary file: it loads the governed champion
 pointer and records its model version with every prediction.
+
+The feature-budget sweep also writes
+`model_selection_charts/feature_elbow.png`, which visualises whether the
+validation lift from more features is large enough to justify the added
+complexity and monitoring burden.

@@ -92,6 +92,15 @@ model remains auditable. The weakest explainability area is the anonymised
 CSI and explained as source-system behavioural signals rather than
 business-readable drivers.
 
+The feature-count decision is framed as a bias-variance and governance trade-off.
+Too few features can underfit because useful borrower, credit and behavioural
+signals are removed. Too many features can overfit, increase monitoring scope and
+make the model harder to explain. The pipeline therefore plots an elbow chart:
+`model_selection_charts/feature_elbow.png`. If validation PR-AUC flattens after
+40 or 60 features, the smaller set should be preferred. In this run the full
+76-feature set still produced a visible validation lift after the small
+feature-count penalty, so all features remained justified.
+
 ## Automated but governed champion promotion
 
 1. Airflow fingerprints the model code and Gold training inputs.
@@ -233,6 +242,8 @@ Use the candidate-model table above. Emphasise:
 - Show the four-family validation and OOT comparison.
 - Histogram Gradient Boosting deeper with all features wins on the governance
   score after passing P0.
+- Show `model_selection_charts/feature_elbow.png` to justify why the full
+  76-feature set is retained despite the larger monitoring burden.
 - OOT is not used during model selection.
 - Show the controlled promotion sequence:
   fingerprint -> train challengers -> P0 gate -> compare current validation
