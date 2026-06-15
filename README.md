@@ -65,11 +65,6 @@ The dashboard displays:
 `render.yaml` is included for a later Render deployment. The dashboard is part
 of this Assignment 2 repository and uses `dashboard/Dockerfile`.
 
-The monitoring-focused layout was informed by the earlier group-project
-dashboard at
-`https://smu-cs611-mle-groupproject-frauddetection.onrender.com/`, while this
-implementation is a separate, simpler dashboard backed by Assignment 2 output.
-
 ## Monitoring definitions
 
 - **P0: Recall**, with a validation floor of 0.70, because failing to identify
