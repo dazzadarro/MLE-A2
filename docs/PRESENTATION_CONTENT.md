@@ -16,39 +16,40 @@ one label per loan.
 ## Candidate models and actual results
 
 The shortlist intentionally moves from simple and explainable to stronger
-nonlinear tabular learners. The pipeline now trains 12 candidates: three
-hyperparameter variants for each of four model families. All candidates use the
-same 72 model inputs, the same chronological train/validation/test/OOT split,
-and the same random seed. This makes the comparison fair: differences come from
-the learning algorithm and hyperparameters, not from different data samples or
-feature sets.
+nonlinear tabular learners. The pipeline now evaluates 36 governed candidates:
+three hyperparameter variants for each of four model families, crossed with
+three train-only feature budgets: top 40, top 60 and all features. All
+candidates use the same chronological train/validation/test/OOT split and the
+same random seed. This makes the comparison fair: differences come from the
+learning algorithm, hyperparameters and feature budget, not from different data
+samples.
 
 | Best candidate per family | Shortlist justification | Validation recall | Validation PR-AUC | Governance score | OOT recall | OOT PR-AUC |
 |---|---|---:|---:|---:|---:|---:|
-| Logistic Regression `C=3.0` | Governance baseline. It is fast, stable, coefficient-based and easy to explain to business users. It also tests whether linear decision boundaries are sufficient after engineered ratios, standardised numerics and one-hot categories. | 0.739 | 0.573 | 0.573 | 0.738 | 0.474 |
-| Random Forest depth 12, leaf 5 | Robust nonlinear benchmark. It handles interactions and non-monotonic relationships without heavy preprocessing, and bagging reduces variance. It is less transparent than logistic regression, but still easier to explain than boosted ensembles through feature importance. | 0.736 | 0.621 | 0.616 | 0.716 | 0.524 |
-| Histogram Gradient Boosting balanced | Efficient advanced tabular model. It captures nonlinear patterns and interactions with lower runtime and governance complexity than XGBoost. It is a strong fit for the dataset size and provides a good performance/complexity balance. | 0.736 | **0.654** | **0.644** | 0.723 | 0.522 |
-| XGBoost depth 4, lr 0.03 | High-performing boosted-tree challenger. It is included because it is a proven tabular ML benchmark and handles class imbalance through `scale_pos_weight`. It has more tuning and governance complexity, so it must clearly outperform simpler options before deployment. | 0.755 | 0.644 | 0.629 | 0.716 | **0.546** |
+| Logistic Regression `C=3.0`, top 60 features | Governance baseline. It is fast, stable, coefficient-based and easy to explain to business users. It also tests whether linear decision boundaries are sufficient after engineered ratios, standardised numerics and one-hot categories. | 0.736 | 0.573 | 0.570 | 0.738 | 0.474 |
+| Random Forest depth 10, leaf 5, top 60 features | Robust nonlinear benchmark. It handles interactions and non-monotonic relationships without heavy preprocessing, and bagging reduces variance. It is less transparent than logistic regression, but still easier to explain than boosted ensembles through feature importance. | 0.724 | 0.624 | 0.616 | 0.695 | 0.524 |
+| Histogram Gradient Boosting deeper, all features | Efficient advanced tabular model. It captures nonlinear patterns and interactions with lower runtime and governance complexity than XGBoost. It is a strong fit for the dataset size and provides the best performance/complexity balance. | 0.736 | **0.661** | **0.647** | 0.709 | 0.538 |
+| XGBoost depth 4, lr 0.05, top 60 features | High-performing boosted-tree challenger. It is included because it is a proven tabular ML benchmark and handles class imbalance through `scale_pos_weight`. It has more tuning and governance complexity, so it must clearly outperform simpler options before deployment. | 0.739 | 0.650 | 0.632 | 0.723 | **0.549** |
 
-Histogram Gradient Boosting balanced is the champion because it passed the P0
-recall floor and achieved the highest simplicity-adjusted governance score.
-XGBoost performed strongly on OOT, but OOT was deliberately not used for
-champion selection.
+Histogram Gradient Boosting deeper with all features is the champion because it
+passed the P0 recall floor and achieved the highest governance score after both
+model-complexity and feature-count penalties. XGBoost performed strongly on
+OOT, but OOT was deliberately not used for champion selection.
 
 The earlier dashboard view showing recall close to 1.00 came from months inside
 the training window. Those values were in-sample and therefore not valid
 evidence of generalisation. The monitoring output now suppresses train-period
 P0/P1 and reports performance only for validation, test and OOT months:
-validation recall is 0.736, test recall is 0.753 and OOT recall is 0.723.
+validation recall is 0.736 and OOT recall is 0.709.
 
 Full candidate search:
 
-| Family | Variants trained | Best validation candidate |
-|---|---:|---|
-| Logistic Regression | 3 | `logistic_regression_c3_0` |
-| Random Forest | 3 | `random_forest_depth12_leaf5` |
-| Histogram Gradient Boosting | 3 | `hist_gradient_boosting_balanced` |
-| XGBoost | 3 | `xgboost_depth4_lr0_03` |
+| Family | Hyperparameter variants | Feature budgets | Best validation candidate |
+|---|---:|---|---|
+| Logistic Regression | 3 | top 40 / top 60 / all | `logistic_regression_c3_0__top_60_features` |
+| Random Forest | 3 | top 40 / top 60 / all | `random_forest_depth10_leaf5__top_60_features` |
+| Histogram Gradient Boosting | 3 | top 40 / top 60 / all | `hist_gradient_boosting_deeper__all_features` |
+| XGBoost | 3 | top 40 / top 60 / all | `xgboost_depth4_lr0_05__top_60_features` |
 
 ## Performance versus simplicity decision
 
@@ -57,8 +58,9 @@ The model selection rule is not a weighted average. It is a governed hierarchy:
 1. **P0 gate:** validation recall must be at least 0.70.
 2. **P1 ranking:** among models that pass P0, use validation PR-AUC as the main
    ranking signal.
-3. **Simplicity adjustment:** subtract a small complexity penalty from PR-AUC
-   so a more complex model must clearly outperform a simpler option.
+3. **Simplicity adjustment:** subtract small model-complexity and feature-count
+   penalties from PR-AUC so a more complex model or larger feature set must
+   clearly outperform a simpler option.
 4. **Tie-breakers:** raw PR-AUC, recall and precision are used if scores are
    close.
 5. **OOT holdout:** OOT is used for post-selection reporting, not for choosing
@@ -71,7 +73,7 @@ unnecessary model complexity when performance is close.
 
 | Comparison | Decision |
 |---|---|
-| Logistic Regression versus HGB | Logistic is simpler, but HGB improves validation PR-AUC by 0.081 absolute while still passing P0. The gain is large enough to justify the added complexity. |
+| Logistic Regression versus HGB | Logistic is simpler, but HGB improves validation PR-AUC by 0.088 absolute while still passing P0. The gain is large enough to justify the added complexity. |
 | Random Forest versus HGB | Random Forest is less complex, but HGB has materially higher PR-AUC and better ranking quality. |
 | XGBoost versus HGB | XGBoost has higher validation recall and slightly better OOT PR-AUC, but HGB has higher validation PR-AUC and lower governance complexity. Since OOT is reporting-only, HGB remains the champion. |
 
@@ -79,21 +81,24 @@ If two models have near-identical validation PR-AUC, for example within 0.01 to
 0.02, prefer the simpler model unless there is a business reason to do
 otherwise.
 
-Feature simplicity is acceptable but not perfect. The model uses 72 inputs after
-train-only preprocessing. These are engineered financial ratios, standardised
-numeric features, one-hot categorical features and aggregated clickstream
-features. No PCA or broad polynomial expansion is used, so the model remains
-auditable. The weakest explainability area is the anonymised `fe_1` to `fe_20`
-clickstream features, which should be monitored closely using CSI and explained
-as source-system behavioural signals rather than business-readable drivers.
+Feature simplicity is acceptable but not perfect. The final champion uses 76
+inputs after train-only preprocessing. These are engineered financial ratios,
+standardised numeric features, one-hot categorical features and aggregated
+clickstream features. The feature search also tested top-40 and top-60 subsets
+ranked using a train-only embedded selector, so feature count was treated as a
+governed design choice. No PCA or broad polynomial expansion is used, so the
+model remains auditable. The weakest explainability area is the anonymised
+`fe_1` to `fe_20` clickstream features, which should be monitored closely using
+CSI and explained as source-system behavioural signals rather than
+business-readable drivers.
 
 ## Automated but governed champion promotion
 
 1. Airflow fingerprints the model code and Gold training inputs.
 2. Unchanged inputs reuse the current champion, avoiding needless retraining
    during monthly backfills.
-3. Changed code or data triggers all twelve model candidates to be trained and
-   evaluated again.
+3. Changed code or data triggers all 36 model and feature-budget candidates to
+   be trained and evaluated again.
 4. A challenger is promoted only if it passes P0 recall and outranks the
    incumbent on the simplicity-adjusted validation governance score, with raw
    PR-AUC, recall and precision as tie-breakers.
@@ -129,13 +134,17 @@ option.
 | Random Forest | depth 8/10/12, leaf 5/10, 160-220 trees | Tests model capacity while limiting overfitting. |
 | Histogram Gradient Boosting | compact, balanced and deeper variants | Tests boosting capacity, learning rate and leaf complexity. |
 | XGBoost | depth 3/4, learning rate 0.03/0.05, 220-320 trees | Tests stronger boosted-tree variants with imbalance weighting. |
+| Feature budgets | top 40, top 60 and all features | Tests whether a smaller ranked feature set can match the full feature set. |
 
 The decision threshold is tuned per model on the validation set. The threshold
 search chooses a threshold that satisfies the P0 recall objective where
 possible, then maximises F1 and precision as secondary trade-offs. The final
 champion is selected using a governance score:
 
-`governance_score = validation PR-AUC - 0.005 * (simplicity_tier - 1)`
+`governance_score = validation PR-AUC - 0.005 * (simplicity_tier - 1) - 0.00005 * feature_count`
+
+The feature-count penalty is intentionally small, so larger feature sets must
+offer a real validation PR-AUC improvement but are not rejected mechanically.
 
 This keeps PR-AUC dominant while requiring more complex models to provide a
 clear improvement before deployment.
@@ -171,7 +180,7 @@ the implementation:
 - Predict loan default at application time using a supervised binary classifier.
 - Label: `30dpd_6mob`, engineered from future LMS repayment performance.
 - Champion: Histogram Gradient Boosting.
-- OOT result: recall 0.723, PR-AUC 0.522 and ROC-AUC 0.770.
+- OOT result: recall 0.709, PR-AUC 0.538 and ROC-AUC 0.774.
 - Airflow automates feature readiness, champion governance, inference and
   monitoring.
 
@@ -200,11 +209,15 @@ Include the two Airflow entry points:
 ### Slide 4: Feature and model dataset preparation
 
 - One row per loan.
-- Financial ratios and aggregated clickstream features.
+- Financial ratios, including debt/income, EMI/income, investment/income,
+  balance/debt, inquiries/loan and repayment ability, plus aggregated
+  clickstream features.
 - Chronological 80/10/10 split plus latest month as OOT.
 - Train-only median imputation, p1/p99 capping, standardisation and one-hot
   encoding.
 - No future repayment fields in model features.
+- Train-only feature ranking supports top-40, top-60 and all-feature candidate
+  evaluation.
 
 ### Slide 5: Candidate models and metric hierarchy
 
@@ -217,9 +230,9 @@ Use the candidate-model table above. Emphasise:
 
 ### Slide 6: Champion result and governed promotion
 
-- Show the four-model validation and OOT comparison.
-- Histogram Gradient Boosting wins on the simplicity-adjusted governance score
-  after passing P0.
+- Show the four-family validation and OOT comparison.
+- Histogram Gradient Boosting deeper with all features wins on the governance
+  score after passing P0.
 - OOT is not used during model selection.
 - Show the controlled promotion sequence:
   fingerprint -> train challengers -> P0 gate -> compare current validation
@@ -241,15 +254,15 @@ Use the corrected performance chart:
 
 - Training-window P0/P1 is intentionally suppressed as in-sample reference.
 - Validation recall: 0.736.
-- Test recall: 0.753.
-- OOT recall: 0.723.
-- OOT predicted default rate: 37.1%; observed default rate: 26.8%.
+- Test recall: 0.756.
+- OOT recall: 0.709.
+- OOT predicted default rate: 36.3%; observed default rate: 26.8%.
 - Explain delayed-label monitoring: PSI/CSI is immediate, outcome performance
   is evaluated only after labels mature.
 
 ### Slide 9: Stability monitoring and root-cause finding
 
-- OOT score PSI: 0.320, therefore significant population drift.
+- OOT score PSI: 0.414, therefore significant population drift.
 - The largest CSI values are the standardised clickstream features.
 - Root cause: clickstream source data ends at December 2024, but the OOT
   application month is January 2025.
@@ -284,7 +297,7 @@ Limitations:
 | Leakage separation | Yes | Repayment outcome fields excluded from feature/model stores |
 | Chronological train/validation/test/OOT | Yes | `data_split` in Gold stores |
 | Train-only preprocessing | Yes | Gold preprocessing metadata fitted from train |
-| Multiple model candidates | Yes | 12 candidates across Logistic Regression, Random Forest, Histogram GB, XGBoost |
+| Multiple model candidates | Yes | 36 candidates across Logistic Regression, Random Forest, Histogram GB, XGBoost and top-40/top-60/all feature budgets |
 | Mandatory P0 gate | Yes | Training fails if no candidate passes recall 0.70 |
 | Validation-based champion selection | Yes | Eligible models ranked by validation PR-AUC |
 | OOT excluded from selection | Yes | OOT records are reporting-only |

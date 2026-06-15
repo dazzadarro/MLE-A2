@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -28,6 +29,8 @@ from xgboost import XGBClassifier
 RANDOM_SEED = 42
 P0_RECALL_FLOOR = 0.70
 SIMPLICITY_PENALTY = 0.005
+FEATURE_COUNT_PENALTY = 0.00005
+FEATURE_BUDGETS = (40, 60, None)
 
 ID_COLUMNS = {
     "loan_id",
@@ -62,6 +65,10 @@ RAW_NUMERIC_COLUMNS = {
     "Debt_to_Income_Ratio",
     "EMI_to_Monthly_Income_Ratio",
     "Loan_to_Income_Ratio",
+    "Investment_to_Monthly_Income_Ratio",
+    "Balance_to_Debt_Ratio",
+    "Inquiries_per_Loan",
+    "Repayment_Ability",
     *{f"fe_{i}" for i in range(1, 21)},
 }
 
@@ -384,9 +391,56 @@ def _candidate_specs(imbalance_ratio):
     ]
 
 
-def _governance_score(metrics, simplicity_tier):
-    """Small simplicity penalty breaks close performance ties without overriding P0."""
-    return float(metrics["pr_auc"] - SIMPLICITY_PENALTY * (simplicity_tier - 1))
+def _feature_budget_name(feature_count, total_feature_count):
+    return "all_features" if feature_count >= total_feature_count else f"top_{feature_count}_features"
+
+
+def _rank_features_with_train_only_selector(train, feature_columns, imbalance_ratio):
+    """Rank features using only train rows, so feature selection cannot see validation/OOT."""
+    selector = RandomForestClassifier(
+        n_estimators=120,
+        max_depth=8,
+        min_samples_leaf=10,
+        class_weight="balanced",
+        random_state=RANDOM_SEED,
+        n_jobs=1,
+    )
+    selector.fit(train[feature_columns], train["label"])
+    ranked = sorted(
+        zip(feature_columns, selector.feature_importances_),
+        key=lambda item: (-float(item[1]), item[0]),
+    )
+    return [feature_name for feature_name, _ in ranked]
+
+
+def _feature_sets(train, feature_columns, imbalance_ratio):
+    ranked_features = _rank_features_with_train_only_selector(train, feature_columns, imbalance_ratio)
+    total_feature_count = len(feature_columns)
+    feature_sets = []
+    seen = set()
+    for budget in FEATURE_BUDGETS:
+        selected_count = total_feature_count if budget is None else min(budget, total_feature_count)
+        if selected_count in seen:
+            continue
+        seen.add(selected_count)
+        selected_features = ranked_features[:selected_count] if selected_count < total_feature_count else list(feature_columns)
+        feature_sets.append(
+            {
+                "feature_set_name": _feature_budget_name(selected_count, total_feature_count),
+                "feature_count": selected_count,
+                "feature_columns": selected_features,
+            }
+        )
+    return feature_sets
+
+
+def _governance_score(metrics, simplicity_tier, feature_count):
+    """Small model and feature-count penalties break close ties without overriding P0/P1."""
+    return float(
+        metrics["pr_auc"]
+        - SIMPLICITY_PENALTY * (simplicity_tier - 1)
+        - FEATURE_COUNT_PENALTY * feature_count
+    )
 
 
 def train_and_select_model(project_dir):
@@ -400,7 +454,7 @@ def train_and_select_model(project_dir):
     model_df = _read_parquet(gold_root / "model_feature_store")
     labels = _read_parquet(gold_root / "label_store")[["loan_id", "label"]]
     modelling = model_df.merge(labels, on="loan_id", how="inner")
-    feature_columns = _model_columns(modelling)
+    full_feature_columns = _model_columns(modelling)
 
     split_sort_columns = ["snapshot_date", "loan_id"]
     train = (
@@ -430,64 +484,79 @@ def train_and_select_model(project_dir):
     positive_count = int((train["label"] == 1).sum())
     imbalance_ratio = negative_count / max(positive_count, 1)
     candidates = _candidate_specs(imbalance_ratio)
+    feature_sets = _feature_sets(train, full_feature_columns, imbalance_ratio)
 
     rows = []
     fitted = {}
     candidate_metadata = {}
-    for candidate in candidates:
-        model_name = candidate["model_name"]
-        model_family = candidate["model_family"]
-        simplicity_tier = candidate["simplicity_tier"]
-        hyperparameters = candidate["hyperparameters"]
-        model = candidate["model"]
-        if model_family == "hist_gradient_boosting":
-            sample_weight = np.where(train["label"].to_numpy() == 1, imbalance_ratio, 1.0)
-            model.fit(train[feature_columns], train["label"], sample_weight=sample_weight)
-        else:
-            model.fit(train[feature_columns], train["label"])
-        validation_probability = model.predict_proba(validation[feature_columns])[:, 1]
-        threshold = choose_threshold(validation["label"].to_numpy(), validation_probability)
-        validation_metrics = calculate_metrics(validation["label"], validation_probability, threshold)
-        test_probability = model.predict_proba(test[feature_columns])[:, 1]
-        test_metrics = calculate_metrics(test["label"], test_probability, threshold)
-        fitted[model_name] = (model, threshold)
-        candidate_metadata[model_name] = {
-            "model_family": model_family,
-            "simplicity_tier": simplicity_tier,
-            "hyperparameters": hyperparameters,
-        }
+    for feature_set in feature_sets:
+        feature_columns = feature_set["feature_columns"]
+        feature_set_name = feature_set["feature_set_name"]
+        feature_count = int(feature_set["feature_count"])
+        for candidate in candidates:
+            base_model_name = candidate["model_name"]
+            model_name = f"{base_model_name}__{feature_set_name}"
+            model_family = candidate["model_family"]
+            simplicity_tier = candidate["simplicity_tier"]
+            hyperparameters = candidate["hyperparameters"]
+            model = clone(candidate["model"])
+            if model_family == "hist_gradient_boosting":
+                sample_weight = np.where(train["label"].to_numpy() == 1, imbalance_ratio, 1.0)
+                model.fit(train[feature_columns], train["label"], sample_weight=sample_weight)
+            else:
+                model.fit(train[feature_columns], train["label"])
+            validation_probability = model.predict_proba(validation[feature_columns])[:, 1]
+            threshold = choose_threshold(validation["label"].to_numpy(), validation_probability)
+            validation_metrics = calculate_metrics(validation["label"], validation_probability, threshold)
+            test_probability = model.predict_proba(test[feature_columns])[:, 1]
+            test_metrics = calculate_metrics(test["label"], test_probability, threshold)
+            fitted[model_name] = (model, threshold)
+            candidate_metadata[model_name] = {
+                "base_model_name": base_model_name,
+                "model_family": model_family,
+                "simplicity_tier": simplicity_tier,
+                "hyperparameters": hyperparameters,
+                "feature_set_name": feature_set_name,
+                "feature_count": feature_count,
+                "feature_columns": feature_columns,
+            }
 
-        oot_probability = model.predict_proba(oot[feature_columns])[:, 1]
-        oot_metrics = calculate_metrics(oot["label"], oot_probability, threshold)
-        for dataset_name, metrics in [
-            ("validation", validation_metrics),
-            ("test", test_metrics),
-            ("oot", oot_metrics),
-        ]:
-            rows.append(
-                {
-                    "model_name": model_name,
-                    "model_family": model_family,
-                    "dataset": dataset_name,
-                    "decision_threshold": threshold,
-                    "p0_metric_name": "recall",
-                    "p0_metric_value": metrics["recall"],
-                    "p0_minimum": P0_RECALL_FLOOR,
-                    "p0_pass": metrics["recall"] >= P0_RECALL_FLOOR,
-                    "p1_metric_name": "pr_auc",
-                    "p1_metric_value": metrics["pr_auc"],
-                    "p2_metric_name": "precision",
-                    "p2_metric_value": metrics["precision"],
-                    "p3_metric_name": "roc_auc",
-                    "p3_metric_value": metrics["roc_auc"],
-                    "simplicity_tier": simplicity_tier,
-                    "simplicity_penalty": SIMPLICITY_PENALTY * (simplicity_tier - 1),
-                    "governance_score": _governance_score(metrics, simplicity_tier),
-                    "hyperparameters": json.dumps(hyperparameters, sort_keys=True),
-                    "used_for_champion_selection": dataset_name == "validation",
-                    **metrics,
-                }
-            )
+            oot_probability = model.predict_proba(oot[feature_columns])[:, 1]
+            oot_metrics = calculate_metrics(oot["label"], oot_probability, threshold)
+            feature_count_penalty = FEATURE_COUNT_PENALTY * feature_count
+            for dataset_name, metrics in [
+                ("validation", validation_metrics),
+                ("test", test_metrics),
+                ("oot", oot_metrics),
+            ]:
+                rows.append(
+                    {
+                        "model_name": model_name,
+                        "base_model_name": base_model_name,
+                        "model_family": model_family,
+                        "feature_set_name": feature_set_name,
+                        "feature_count": feature_count,
+                        "dataset": dataset_name,
+                        "decision_threshold": threshold,
+                        "p0_metric_name": "recall",
+                        "p0_metric_value": metrics["recall"],
+                        "p0_minimum": P0_RECALL_FLOOR,
+                        "p0_pass": metrics["recall"] >= P0_RECALL_FLOOR,
+                        "p1_metric_name": "pr_auc",
+                        "p1_metric_value": metrics["pr_auc"],
+                        "p2_metric_name": "precision",
+                        "p2_metric_value": metrics["precision"],
+                        "p3_metric_name": "roc_auc",
+                        "p3_metric_value": metrics["roc_auc"],
+                        "simplicity_tier": simplicity_tier,
+                        "simplicity_penalty": SIMPLICITY_PENALTY * (simplicity_tier - 1),
+                        "feature_count_penalty": feature_count_penalty,
+                        "governance_score": _governance_score(metrics, simplicity_tier, feature_count),
+                        "hyperparameters": json.dumps(hyperparameters, sort_keys=True),
+                        "used_for_champion_selection": dataset_name == "validation",
+                        **metrics,
+                    }
+                )
 
     evaluation = pd.DataFrame(rows)
     eligible_validation = evaluation[
@@ -504,6 +573,7 @@ def train_and_select_model(project_dir):
     champion_model, champion_threshold = fitted[champion_name]
     champion_validation = validation_results.iloc[0]
     champion_metadata = candidate_metadata[champion_name]
+    feature_columns = champion_metadata["feature_columns"]
     model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     training_probabilities = champion_model.predict_proba(train[feature_columns])[:, 1]
@@ -521,13 +591,17 @@ def train_and_select_model(project_dir):
 
     artefact = {
         "model_name": champion_name,
+        "base_model_name": champion_metadata["base_model_name"],
         "model_family": champion_metadata["model_family"],
+        "feature_set_name": champion_metadata["feature_set_name"],
+        "feature_count": int(champion_metadata["feature_count"]),
         "model_version": model_version,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "random_seed": RANDOM_SEED,
         "hyperparameters": deepcopy(champion_metadata["hyperparameters"]),
         "simplicity_tier": int(champion_metadata["simplicity_tier"]),
         "governance_score": float(champion_validation["governance_score"]),
+        "feature_count_penalty": float(champion_validation["feature_count_penalty"]),
         "model": champion_model,
         "decision_threshold": float(champion_threshold),
         "feature_columns": feature_columns,
@@ -572,34 +646,31 @@ def train_and_select_model(project_dir):
     incumbent_current_metrics = None
     if incumbent:
         incumbent_columns = incumbent.get("feature_columns", [])
-        if incumbent_columns == feature_columns:
-            if "model_family" not in incumbent or "governance_score" not in incumbent:
-                # Promote the best current candidate when the incumbent was
-                # created before richer governance metadata was introduced.
-                incumbent_rank = (False, float("-inf"), float("-inf"), float("-inf"), float("-inf"))
-            else:
-                incumbent_probability = incumbent["model"].predict_proba(
-                    validation[incumbent_columns]
-                )[:, 1]
-                incumbent_current_metrics = calculate_metrics(
-                    validation["label"],
-                    incumbent_probability,
-                    incumbent["decision_threshold"],
-                )
-                incumbent_rank = (
-                    float(incumbent_current_metrics["recall"]) >= P0_RECALL_FLOOR,
-                    _governance_score(
-                        incumbent_current_metrics,
-                        int(incumbent.get("simplicity_tier", 3)),
-                    ),
-                    float(incumbent_current_metrics["pr_auc"]),
-                    float(incumbent_current_metrics["recall"]),
-                    float(incumbent_current_metrics["precision"]),
-                )
+        missing_incumbent_columns = [column for column in incumbent_columns if column not in validation.columns]
+        if "model_family" not in incumbent or "governance_score" not in incumbent or missing_incumbent_columns:
+            # Promote the best current candidate when the incumbent was created
+            # before richer governance metadata or compatible features existed.
+            incumbent_rank = (False, float("-inf"), float("-inf"), float("-inf"), float("-inf"))
         else:
-            # A changed feature contract requires explicit review rather than
-            # comparing metrics produced from incompatible feature sets.
-            incumbent_rank = (True, float("inf"), float("inf"), float("inf"))
+            incumbent_probability = incumbent["model"].predict_proba(
+                validation[incumbent_columns]
+            )[:, 1]
+            incumbent_current_metrics = calculate_metrics(
+                validation["label"],
+                incumbent_probability,
+                incumbent["decision_threshold"],
+            )
+            incumbent_rank = (
+                float(incumbent_current_metrics["recall"]) >= P0_RECALL_FLOOR,
+                _governance_score(
+                    incumbent_current_metrics,
+                    int(incumbent.get("simplicity_tier", 3)),
+                    int(incumbent.get("feature_count", len(incumbent_columns))),
+                ),
+                float(incumbent_current_metrics["pr_auc"]),
+                float(incumbent_current_metrics["recall"]),
+                float(incumbent_current_metrics["precision"]),
+            )
 
     promoted = incumbent is None or challenger_rank > incumbent_rank
     if promoted:
@@ -630,11 +701,14 @@ def train_and_select_model(project_dir):
         "decision_threshold": float(deployed["decision_threshold"]),
         "latest_challenger_model": champion_name,
         "latest_challenger_family": champion_metadata["model_family"],
+        "latest_challenger_feature_set": champion_metadata["feature_set_name"],
+        "latest_challenger_feature_count": int(champion_metadata["feature_count"]),
         "latest_challenger_version": model_version,
         "latest_challenger_promoted": promoted,
         "promotion_reason": promotion_reason,
-        "candidate_count": len(candidates),
+        "candidate_count": len(candidates) * len(feature_sets),
         "model_family_count": len({candidate["model_family"] for candidate in candidates}),
+        "feature_set_count": len(feature_sets),
         "incumbent_current_validation": incumbent_current_metrics,
         "random_seed": RANDOM_SEED,
         "training_signature": training_signature(project_dir),
@@ -643,9 +717,9 @@ def train_and_select_model(project_dir):
         "p2_metric": "precision",
         "p3_metric": "roc_auc",
         "selection_rule": (
-            "Pass the validation recall floor of 0.70, then maximise a simplicity-adjusted "
-            "validation PR-AUC governance score; use raw PR-AUC, recall and precision as "
-            "tie-breakers. OOT is reporting-only."
+            "Pass the validation recall floor of 0.70, then maximise validation PR-AUC "
+            "after small model-complexity and feature-count penalties; use raw PR-AUC, "
+            "recall and precision as tie-breakers. OOT is reporting-only."
         ),
     }
     (model_bank / "model_registry.json").write_text(

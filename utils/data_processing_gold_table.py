@@ -123,6 +123,13 @@ def build_financial_features(financials):
             "EMI_to_Monthly_Income_Ratio",
             _safe_divide(col("Total_EMI_per_month"), col("Monthly_Inhand_Salary")),
         )
+        .withColumn(
+            "Investment_to_Monthly_Income_Ratio",
+            _safe_divide(col("Amount_invested_monthly"), col("Monthly_Inhand_Salary")),
+        )
+        .withColumn("Balance_to_Debt_Ratio", _safe_divide(col("Monthly_Balance"), col("Outstanding_Debt")))
+        .withColumn("Inquiries_per_Loan", _safe_divide(col("Num_Credit_Inquiries"), col("Num_of_Loan")))
+        .withColumn("Repayment_Ability", col("Monthly_Inhand_Salary") - col("Total_EMI_per_month"))
     )
 
 
@@ -491,6 +498,10 @@ def build_gold_tables(
                 "Num_Loan_Types",
                 "Debt_to_Income_Ratio",
                 "EMI_to_Monthly_Income_Ratio",
+                "Investment_to_Monthly_Income_Ratio",
+                "Balance_to_Debt_Ratio",
+                "Inquiries_per_Loan",
+                "Repayment_Ability",
             ),
             ["Customer_ID", "snapshot_date"],
             "left",

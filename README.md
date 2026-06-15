@@ -90,11 +90,13 @@ outcome label. Train-window months remain available as PSI/CSI references, but
 their in-sample P0/P1 values are deliberately suppressed; reported performance
 starts from validation and continues through test and OOT.
 
-Training automatically evaluates 12 candidates across four model families on
-validation data. A challenger must pass P0 recall and outrank the incumbent on
-a simplicity-adjusted P1 PR-AUC governance score before `champion_model.pkl` is
-replaced. The Airflow champion task fingerprints the model code and Gold
-training inputs, so unchanged backfills reuse the current champion while
-updated code or data triggers controlled challenger evaluation. Inference never
-selects an arbitrary file: it loads the governed champion pointer and records
-its model version with every prediction.
+Training automatically evaluates 36 governed candidates: three hyperparameter
+variants across each of four model families, crossed with top-40, top-60 and
+all-feature budgets. Feature ranking is fitted on train rows only. A challenger
+must pass P0 recall and outrank the incumbent on a validation PR-AUC governance
+score after small model-complexity and feature-count penalties before
+`champion_model.pkl` is replaced. The Airflow champion task fingerprints the
+model code and Gold training inputs, so unchanged backfills reuse the current
+champion while updated code or data triggers controlled challenger evaluation.
+Inference never selects an arbitrary file: it loads the governed champion
+pointer and records its model version with every prediction.
