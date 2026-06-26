@@ -17,16 +17,12 @@ from utils.model_lifecycle import (
 def parse_args():
     parser = argparse.ArgumentParser(description="Run CS611 Assignment 2 end-to-end ML pipeline.")
     parser.add_argument("--start-date", default=None, help="Optional application snapshot start date, YYYY-MM-DD.")
-    parser.add_argument("--end-date", default=None, help="Optional application snapshot end date, YYYY-MM-DD.")
-    parser.add_argument("--profile", action="store_true", help="Print row counts for each layer.")
-    parser.add_argument("--validation-date", default=None, help="Optional exact validation snapshot month, YYYY-MM-DD.")
-    parser.add_argument("--test-date", default=None, help="Optional exact test snapshot month, YYYY-MM-DD.")
-    parser.add_argument("--oot-date", default=None, help="Optional exact OOT snapshot month, YYYY-MM-DD.")
     parser.add_argument(
-        "--split-mode",
-        default="auto_chronological_80_10_10_oot",
-        help="Split strategy. Default: auto_chronological_80_10_10_oot.",
+        "--end-date",
+        default="2024-12-01",
+        help="Optional application snapshot end date, YYYY-MM-DD. Default keeps the A2 modelling window to Dec 2024.",
     )
+    parser.add_argument("--profile", action="store_true", help="Print row counts for each layer.")
     parser.add_argument(
         "--skip-model-feature-store",
         action="store_true",
@@ -73,10 +69,6 @@ def main():
             spark,
             start_date=args.start_date,
             end_date=args.end_date,
-            validation_date=args.validation_date,
-            test_date=args.test_date,
-            oot_date=args.oot_date,
-            split_mode=args.split_mode,
             profile=args.profile,
             skip_model_feature_store=args.skip_model_feature_store,
         )

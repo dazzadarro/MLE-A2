@@ -1,8 +1,11 @@
 import hashlib
 import json
 import math
+import os
 import pickle
 import shutil
+import time
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,14 +85,16 @@ def training_signature(project_dir):
         project_dir / "datamart" / "gold" / "model_feature_store",
         project_dir / "datamart" / "gold" / "label_store",
     ]:
-        files = (
-            item
-            for item in root.rglob("*")
-            if item.is_file() and not item.name.endswith(".crc")
-        )
-        for path in sorted(files):
+        # Airflow backfills run over Docker bind mounts, so hashing full
+        # Parquet bytes is unnecessarily slow. File manifests are sufficient
+        # here to detect regenerated Gold training inputs.
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            if path.name.endswith(".crc") or ".lock" in path.parts:
+                continue
+            stat = path.stat()
             digest.update(str(path.relative_to(project_dir)).encode("utf-8"))
-            digest.update(path.read_bytes())
+            digest.update(str(stat.st_size).encode("utf-8"))
+            digest.update(str(stat.st_mtime_ns).encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -100,8 +105,32 @@ def _read_parquet(path):
     return pd.read_parquet(path)
 
 
+@contextmanager
+def _path_write_lock(path, timeout_seconds=300):
+    """Serialize same-path Parquet writes across manual and backfill Airflow runs."""
+    lock_path = Path(f"{path}.lock")
+    start = time.time()
+    while True:
+        try:
+            os.mkdir(lock_path)
+            break
+        except FileExistsError:
+            if time.time() - start > timeout_seconds:
+                raise TimeoutError(f"Timed out waiting for write lock: {lock_path}")
+            time.sleep(0.25)
+    try:
+        yield
+    finally:
+        shutil.rmtree(lock_path, ignore_errors=True)
+
+
 def _write_parquet(df, path, partition_cols=None):
     path = Path(path)
+    with _path_write_lock(path):
+        _write_parquet_unlocked(df, path, partition_cols)
+
+
+def _write_parquet_unlocked(df, path, partition_cols=None):
     if path.exists():
         if path.is_dir():
             shutil.rmtree(path)
@@ -112,6 +141,21 @@ def _write_parquet(df, path, partition_cols=None):
         df.to_parquet(path, index=False, partition_cols=partition_cols)
     else:
         df.to_parquet(path, index=False)
+
+
+def _upsert_snapshot_parquet(df, path, snapshot_date, partition_cols=None):
+    """Replace one snapshot partition while holding the full read/write lock."""
+    path = Path(path)
+    target_date = pd.to_datetime(snapshot_date).date()
+    with _path_write_lock(path):
+        if path.exists():
+            existing = _read_parquet(path)
+            existing["snapshot_date"] = pd.to_datetime(existing["snapshot_date"]).dt.date
+            df = pd.concat(
+                [existing[existing["snapshot_date"] != target_date], df],
+                ignore_index=True,
+            )
+        _write_parquet_unlocked(df, path, partition_cols)
 
 
 def _model_columns(model_feature_store):
@@ -254,52 +298,52 @@ def _candidate_specs(imbalance_ratio):
             "model_name": "random_forest_depth8_leaf10",
             "model_family": "random_forest",
             "simplicity_tier": 2,
-            "hyperparameters": {"n_estimators": 160, "max_depth": 8, "min_samples_leaf": 10},
+            "hyperparameters": {"n_estimators": 40, "max_depth": 8, "min_samples_leaf": 10},
             "model": RandomForestClassifier(
-                n_estimators=160,
+                n_estimators=40,
                 max_depth=8,
                 min_samples_leaf=10,
                 class_weight="balanced",
                 random_state=RANDOM_SEED,
-                n_jobs=1,
+                n_jobs=-1,
             ),
         },
         {
             "model_name": "random_forest_depth10_leaf5",
             "model_family": "random_forest",
             "simplicity_tier": 2,
-            "hyperparameters": {"n_estimators": 200, "max_depth": 10, "min_samples_leaf": 5},
+            "hyperparameters": {"n_estimators": 60, "max_depth": 10, "min_samples_leaf": 5},
             "model": RandomForestClassifier(
-                n_estimators=200,
+                n_estimators=60,
                 max_depth=10,
                 min_samples_leaf=5,
                 class_weight="balanced",
                 random_state=RANDOM_SEED,
-                n_jobs=1,
+                n_jobs=-1,
             ),
         },
         {
             "model_name": "random_forest_depth12_leaf5",
             "model_family": "random_forest",
             "simplicity_tier": 2,
-            "hyperparameters": {"n_estimators": 220, "max_depth": 12, "min_samples_leaf": 5},
+            "hyperparameters": {"n_estimators": 80, "max_depth": 12, "min_samples_leaf": 5},
             "model": RandomForestClassifier(
-                n_estimators=220,
+                n_estimators=80,
                 max_depth=12,
                 min_samples_leaf=5,
                 class_weight="balanced",
                 random_state=RANDOM_SEED,
-                n_jobs=1,
+                n_jobs=-1,
             ),
         },
         {
             "model_name": "hist_gradient_boosting_compact",
             "model_family": "hist_gradient_boosting",
             "simplicity_tier": 3,
-            "hyperparameters": {"learning_rate": 0.08, "max_iter": 140, "max_leaf_nodes": 16},
+            "hyperparameters": {"learning_rate": 0.08, "max_iter": 30, "max_leaf_nodes": 16},
             "model": HistGradientBoostingClassifier(
                 learning_rate=0.08,
-                max_iter=140,
+                max_iter=30,
                 max_leaf_nodes=16,
                 l2_regularization=0.1,
                 random_state=RANDOM_SEED,
@@ -309,10 +353,10 @@ def _candidate_specs(imbalance_ratio):
             "model_name": "hist_gradient_boosting_balanced",
             "model_family": "hist_gradient_boosting",
             "simplicity_tier": 3,
-            "hyperparameters": {"learning_rate": 0.08, "max_iter": 180, "max_leaf_nodes": 24},
+            "hyperparameters": {"learning_rate": 0.08, "max_iter": 45, "max_leaf_nodes": 24},
             "model": HistGradientBoostingClassifier(
                 learning_rate=0.08,
-                max_iter=180,
+                max_iter=45,
                 max_leaf_nodes=24,
                 l2_regularization=0.1,
                 random_state=RANDOM_SEED,
@@ -322,10 +366,10 @@ def _candidate_specs(imbalance_ratio):
             "model_name": "hist_gradient_boosting_deeper",
             "model_family": "hist_gradient_boosting",
             "simplicity_tier": 3,
-            "hyperparameters": {"learning_rate": 0.05, "max_iter": 240, "max_leaf_nodes": 31},
+            "hyperparameters": {"learning_rate": 0.05, "max_iter": 60, "max_leaf_nodes": 31},
             "model": HistGradientBoostingClassifier(
                 learning_rate=0.05,
-                max_iter=240,
+                max_iter=60,
                 max_leaf_nodes=31,
                 l2_regularization=0.1,
                 random_state=RANDOM_SEED,
@@ -335,9 +379,9 @@ def _candidate_specs(imbalance_ratio):
             "model_name": "xgboost_depth3_lr0_05",
             "model_family": "xgboost",
             "simplicity_tier": 4,
-            "hyperparameters": {"n_estimators": 220, "max_depth": 3, "learning_rate": 0.05},
+            "hyperparameters": {"n_estimators": 40, "max_depth": 3, "learning_rate": 0.05},
             "model": XGBClassifier(
-                n_estimators=220,
+                n_estimators=40,
                 max_depth=3,
                 learning_rate=0.05,
                 subsample=0.85,
@@ -345,7 +389,7 @@ def _candidate_specs(imbalance_ratio):
                 scale_pos_weight=imbalance_ratio,
                 eval_metric="logloss",
                 random_state=RANDOM_SEED,
-                n_jobs=1,
+                n_jobs=-1,
                 tree_method="hist",
                 use_label_encoder=False,
             ),
@@ -354,9 +398,9 @@ def _candidate_specs(imbalance_ratio):
             "model_name": "xgboost_depth4_lr0_05",
             "model_family": "xgboost",
             "simplicity_tier": 4,
-            "hyperparameters": {"n_estimators": 250, "max_depth": 4, "learning_rate": 0.05},
+            "hyperparameters": {"n_estimators": 55, "max_depth": 4, "learning_rate": 0.05},
             "model": XGBClassifier(
-                n_estimators=250,
+                n_estimators=55,
                 max_depth=4,
                 learning_rate=0.05,
                 subsample=0.85,
@@ -364,7 +408,7 @@ def _candidate_specs(imbalance_ratio):
                 scale_pos_weight=imbalance_ratio,
                 eval_metric="logloss",
                 random_state=RANDOM_SEED,
-                n_jobs=1,
+                n_jobs=-1,
                 tree_method="hist",
                 use_label_encoder=False,
             ),
@@ -373,9 +417,9 @@ def _candidate_specs(imbalance_ratio):
             "model_name": "xgboost_depth4_lr0_03",
             "model_family": "xgboost",
             "simplicity_tier": 4,
-            "hyperparameters": {"n_estimators": 320, "max_depth": 4, "learning_rate": 0.03},
+            "hyperparameters": {"n_estimators": 70, "max_depth": 4, "learning_rate": 0.03},
             "model": XGBClassifier(
-                n_estimators=320,
+                n_estimators=70,
                 max_depth=4,
                 learning_rate=0.03,
                 subsample=0.85,
@@ -383,7 +427,7 @@ def _candidate_specs(imbalance_ratio):
                 scale_pos_weight=imbalance_ratio,
                 eval_metric="logloss",
                 random_state=RANDOM_SEED,
-                n_jobs=1,
+                n_jobs=-1,
                 tree_method="hist",
                 use_label_encoder=False,
             ),
@@ -396,14 +440,14 @@ def _feature_budget_name(feature_count, total_feature_count):
 
 
 def _rank_features_with_train_only_selector(train, feature_columns, imbalance_ratio):
-    """Rank features using only train rows, so feature selection cannot see validation/OOT."""
+    """Rank features using only train rows, so later months cannot influence selection."""
     selector = RandomForestClassifier(
-        n_estimators=120,
+        n_estimators=30,
         max_depth=8,
         min_samples_leaf=10,
         class_weight="balanced",
         random_state=RANDOM_SEED,
-        n_jobs=1,
+        n_jobs=-1,
     )
     selector.fit(train[feature_columns], train["label"])
     ranked = sorted(
@@ -532,8 +576,8 @@ def train_and_select_model(project_dir):
         .sort_values(split_sort_columns)
         .reset_index(drop=True)
     )
-    if train.empty or validation.empty or test.empty or oot.empty:
-        raise ValueError("Train, validation, test and OOT rows are required before model training.")
+    if train.empty or validation.empty or test.empty:
+        raise ValueError("Train, validation and test rows are required before model training.")
 
     negative_count = int((train["label"] == 0).sum())
     positive_count = int((train["label"] == 1).sum())
@@ -555,6 +599,7 @@ def train_and_select_model(project_dir):
             simplicity_tier = candidate["simplicity_tier"]
             hyperparameters = candidate["hyperparameters"]
             model = clone(candidate["model"])
+            print(f"Training candidate {model_name}", flush=True)
             if model_family == "hist_gradient_boosting":
                 sample_weight = np.where(train["label"].to_numpy() == 1, imbalance_ratio, 1.0)
                 model.fit(train[feature_columns], train["label"], sample_weight=sample_weight)
@@ -576,14 +621,12 @@ def train_and_select_model(project_dir):
                 "feature_columns": feature_columns,
             }
 
-            oot_probability = model.predict_proba(oot[feature_columns])[:, 1]
-            oot_metrics = calculate_metrics(oot["label"], oot_probability, threshold)
             feature_count_penalty = FEATURE_COUNT_PENALTY * feature_count
-            for dataset_name, metrics in [
+            evaluation_slices = [
                 ("validation", validation_metrics),
                 ("test", test_metrics),
-                ("oot", oot_metrics),
-            ]:
+            ]
+            for dataset_name, metrics in evaluation_slices:
                 rows.append(
                     {
                         "model_name": model_name,
@@ -771,11 +814,11 @@ def train_and_select_model(project_dir):
         "p1_metric": "pr_auc",
         "p2_metric": "precision",
         "p3_metric": "roc_auc",
-        "selection_rule": (
-            "Pass the validation recall floor of 0.70, then maximise validation PR-AUC "
-            "after small model-complexity and feature-count penalties; use raw PR-AUC, "
-            "recall and precision as tie-breakers. OOT is reporting-only."
-        ),
+            "selection_rule": (
+                "Pass the validation recall floor of 0.70, then maximise validation PR-AUC "
+                "after small model-complexity and feature-count penalties; use raw PR-AUC, "
+                "recall and precision as tie-breakers. Test/OOT loans are reporting-only."
+            ),
     }
     (model_bank / "model_registry.json").write_text(
         json.dumps(_json_ready(registry), indent=2),
@@ -823,14 +866,10 @@ def run_monthly_inference(project_dir, snapshot_date=None):
     predictions["prediction_created_at_utc"] = datetime.now(timezone.utc).isoformat()
 
     output = gold_root / "model_predictions"
-    if snapshot_date and output.exists():
-        existing = _read_parquet(output)
-        existing["snapshot_date"] = pd.to_datetime(existing["snapshot_date"]).dt.date
-        predictions = pd.concat(
-            [existing[existing["snapshot_date"] != pd.to_datetime(snapshot_date).date()], predictions],
-            ignore_index=True,
-        )
-    _write_parquet(predictions, output, ["snapshot_date"])
+    if snapshot_date:
+        _upsert_snapshot_parquet(predictions, output, snapshot_date, ["snapshot_date"])
+    else:
+        _write_parquet(predictions, output, ["snapshot_date"])
     print(f"Gold predictions written: {output}")
     return predictions
 
@@ -958,25 +997,11 @@ def calculate_monthly_monitoring(project_dir, snapshot_date=None):
     monitoring = pd.DataFrame(monitoring_rows)
     feature_drift = pd.DataFrame(feature_drift_rows)
     if snapshot_date:
-        monitoring_path = gold_root / "model_monitoring"
-        drift_path = gold_root / "feature_drift_monitoring"
-        target_date = pd.to_datetime(snapshot_date).date()
-        if monitoring_path.exists():
-            existing = _read_parquet(monitoring_path)
-            existing["snapshot_date"] = pd.to_datetime(existing["snapshot_date"]).dt.date
-            monitoring = pd.concat(
-                [existing[existing["snapshot_date"] != target_date], monitoring],
-                ignore_index=True,
-            )
-        if drift_path.exists():
-            existing = _read_parquet(drift_path)
-            existing["snapshot_date"] = pd.to_datetime(existing["snapshot_date"]).dt.date
-            feature_drift = pd.concat(
-                [existing[existing["snapshot_date"] != target_date], feature_drift],
-                ignore_index=True,
-            )
-    _write_parquet(monitoring, gold_root / "model_monitoring")
-    _write_parquet(feature_drift, gold_root / "feature_drift_monitoring")
+        _upsert_snapshot_parquet(monitoring, gold_root / "model_monitoring", snapshot_date)
+        _upsert_snapshot_parquet(feature_drift, gold_root / "feature_drift_monitoring", snapshot_date)
+    else:
+        _write_parquet(monitoring, gold_root / "model_monitoring")
+        _write_parquet(feature_drift, gold_root / "feature_drift_monitoring")
     create_monitoring_charts(project_dir, monitoring, feature_drift)
     print(f"Gold monitoring written: {gold_root / 'model_monitoring'}")
     return monitoring, feature_drift

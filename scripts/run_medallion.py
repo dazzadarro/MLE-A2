@@ -1,8 +1,11 @@
 import argparse
 from pathlib import Path
+import sys
 
 import pyspark
 
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_DIR))
 from utils.data_processing_bronze_table import build_bronze_tables
 from utils.data_processing_gold_table import build_gold_tables
 from utils.data_processing_silver_table import build_silver_tables
@@ -17,7 +20,7 @@ def main():
         help="Rebuild Bronze, Silver and Gold even when the completed Gold stores exist.",
     )
     args = parser.parse_args()
-    project_dir = Path(__file__).resolve().parents[1]
+    project_dir = PROJECT_DIR
     required_gold_stores = [
         project_dir / "datamart" / "gold" / "feature_store",
         project_dir / "datamart" / "gold" / "label_store",
@@ -41,7 +44,11 @@ def main():
     try:
         build_bronze_tables(project_dir, spark)
         build_silver_tables(project_dir, spark)
-        build_gold_tables(project_dir, spark)
+        build_gold_tables(
+            project_dir,
+            spark,
+            end_date="2024-12-01",
+        )
     finally:
         spark.stop()
 

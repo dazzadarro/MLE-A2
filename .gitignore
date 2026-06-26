@@ -8,3 +8,9 @@ logs/
 *.log
 *.crc
 .DS_Store
+datamart/
+work/
+for claude/
+node_modules/
+*.tmp
+~$*.pptx

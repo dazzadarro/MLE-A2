@@ -35,7 +35,7 @@ def _read_registry():
     path = MODEL_BANK / "model_registry.json"
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _records(df):
@@ -49,11 +49,22 @@ def _records(df):
     return output.to_dict(orient="records")
 
 
+def _format_month_range(dates):
+    if len(dates) == 0:
+        return "-"
+    ordered = sorted(pd.to_datetime(dates))
+    start = ordered[0].strftime("%b %Y")
+    end = ordered[-1].strftime("%b %Y")
+    return start if start == end else f"{start}-{end}"
+
+
 def dashboard_payload(params):
     monitoring = _read_parquet("model_monitoring")
     drift = _read_parquet("feature_drift_monitoring")
     evaluation = _read_parquet("model_evaluation")
     predictions = _read_parquet("model_predictions")
+    feature_store = _read_parquet("feature_store")
+    labels = _read_parquet("label_store")
     registry = _read_registry()
 
     if monitoring.empty:
@@ -81,12 +92,54 @@ def dashboard_payload(params):
         selected_month = selected.iloc[0]["snapshot_date"].strftime("%Y-%m-%d")
     latest = selected.iloc[0]
 
-    selected_drift = drift[
+    split_summary = {}
+    split_source = feature_store if not feature_store.empty else monitoring
+    if "data_split" in split_source.columns and "snapshot_date" in split_source.columns:
+        split_source = split_source.copy()
+        split_source["snapshot_date"] = pd.to_datetime(split_source["snapshot_date"].astype(str))
+        for split_name, split_df in split_source.groupby("data_split"):
+            split_summary[str(split_name)] = {
+                "start": split_df["snapshot_date"].min().strftime("%Y-%m-%d"),
+                "end": split_df["snapshot_date"].max().strftime("%Y-%m-%d"),
+                "label": _format_month_range(split_df["snapshot_date"]),
+                "month_count": int(split_df["snapshot_date"].nunique()),
+            }
+
+    development_parts = []
+    for split_name in ["train", "validation", "test"]:
+        if split_name in split_summary:
+            development_parts.append(f"{split_name.title()} {split_summary[split_name]['label']}")
+    period_summary = {
+        "development_period": ", ".join(development_parts) if development_parts else "-",
+        "oot_window": split_summary.get("oot", {}).get("label", "-"),
+        "selected_month_label": pd.to_datetime(selected_month).strftime("%b %Y"),
+    }
+
+    p0_minimum = None
+    if not evaluation.empty and "p0_minimum" in evaluation.columns:
+        p0_values = evaluation["p0_minimum"].dropna()
+        if not p0_values.empty:
+            p0_minimum = _clean_number(p0_values.iloc[0])
+
+    selected_drift_all = drift[
         drift["snapshot_date"].dt.strftime("%Y-%m-%d") == selected_month
     ].sort_values("csi", ascending=False)
-    selected_drift = selected_drift.head(15)
+    selected_drift = selected_drift_all.head(15)
 
     prediction_count = 0
+    confusion_matrix = {
+        "available": False,
+        "tn": None,
+        "fp": None,
+        "fn": None,
+        "tp": None,
+        "threshold": _clean_number(registry.get("decision_threshold")),
+        "precision": None,
+        "recall": None,
+        "f1_score": None,
+        "predicted_default_rate": None,
+        "observed_default_rate": None,
+    }
     if not predictions.empty:
         predictions["snapshot_date"] = pd.to_datetime(predictions["snapshot_date"])
         prediction_count = int(
@@ -95,6 +148,44 @@ def dashboard_payload(params):
                 == selected_month
             ).sum()
         )
+        selected_predictions = predictions[
+            predictions["snapshot_date"].dt.strftime("%Y-%m-%d") == selected_month
+        ]
+
+        if not labels.empty and not selected_predictions.empty:
+            labels["snapshot_date"] = pd.to_datetime(labels["snapshot_date"])
+            labelled_predictions = selected_predictions.merge(
+                labels[["loan_id", "snapshot_date", "label"]],
+                on=["loan_id", "snapshot_date"],
+                how="inner",
+            )
+            if not labelled_predictions.empty:
+                actual = labelled_predictions["label"].astype(int)
+                predicted = labelled_predictions["predicted_label"].astype(int)
+                tn = int(((actual == 0) & (predicted == 0)).sum())
+                fp = int(((actual == 0) & (predicted == 1)).sum())
+                fn = int(((actual == 1) & (predicted == 0)).sum())
+                tp = int(((actual == 1) & (predicted == 1)).sum())
+                precision = tp / (tp + fp) if (tp + fp) else None
+                recall = tp / (tp + fn) if (tp + fn) else None
+                f1_score = (
+                    2 * precision * recall / (precision + recall)
+                    if precision is not None and recall is not None and (precision + recall)
+                    else None
+                )
+                confusion_matrix = {
+                    "available": True,
+                    "tn": tn,
+                    "fp": fp,
+                    "fn": fn,
+                    "tp": tp,
+                    "threshold": _clean_number(selected_predictions["decision_threshold"].iloc[0]),
+                    "precision": _clean_number(precision),
+                    "recall": _clean_number(recall),
+                    "f1_score": _clean_number(f1_score),
+                    "predicted_default_rate": _clean_number(predicted.mean()),
+                    "observed_default_rate": _clean_number(actual.mean()),
+                }
 
     summary = {
         "snapshot_date": selected_month,
@@ -112,10 +203,8 @@ def dashboard_payload(params):
         "psi": _clean_number(latest.get("psi")),
         "predicted_default_rate": _clean_number(latest.get("predicted_default_rate")),
         "observed_default_rate": _clean_number(latest.get("observed_default_rate")),
-        "significant_feature_count": int((selected_drift["csi"] > 0.25).sum()),
-        "watch_feature_count": int(
-            ((selected_drift["csi"] >= 0.10) & (selected_drift["csi"] <= 0.25)).sum()
-        ),
+        "significant_feature_count": int((selected_drift_all["drift_status"] == "significant_drift").sum()),
+        "watch_feature_count": int((selected_drift_all["drift_status"] == "watch").sum()),
     }
 
     performance_columns = [
@@ -140,6 +229,8 @@ def dashboard_payload(params):
         "drift_status",
         "baseline_mean",
         "current_mean",
+        "baseline_stddev",
+        "current_stddev",
     ]
 
     return {
@@ -152,6 +243,10 @@ def dashboard_payload(params):
         "performance": _records(performance),
         "drift": _records(selected_drift[drift_columns]),
         "evaluation": _records(evaluation),
+        "confusion_matrix": confusion_matrix,
+        "split_summary": split_summary,
+        "period_summary": period_summary,
+        "p0_minimum": p0_minimum,
         "thresholds": {
             "stable_upper": 0.10,
             "watch_upper": 0.25,

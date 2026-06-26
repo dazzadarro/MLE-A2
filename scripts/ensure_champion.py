@@ -1,21 +1,33 @@
+import argparse
 import json
 from pathlib import Path
+import sys
 
-from utils.model_lifecycle import train_and_select_model, training_signature
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_DIR))
 
 
 if __name__ == "__main__":
-    project_dir = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Train and evaluate challengers even when a governed champion exists.",
+    )
+    args = parser.parse_args()
+
+    project_dir = PROJECT_DIR
     champion = project_dir / "model_bank" / "champion_model.pkl"
     registry_path = project_dir / "model_bank" / "model_registry.json"
     registry = (
-        json.loads(registry_path.read_text(encoding="utf-8"))
+        json.loads(registry_path.read_text(encoding="utf-8-sig"))
         if registry_path.exists()
         else {}
     )
-    current_signature = training_signature(project_dir)
-    if champion.exists() and registry.get("training_signature") == current_signature:
-        print(f"Champion model already exists: {champion}")
+    if champion.exists() and registry and not args.force_refresh:
+        print(f"Champion model already exists and will be reused: {champion}")
     else:
-        print("Model code or training data changed; evaluating fresh challengers.")
+        print("Champion missing or refresh requested; evaluating fresh challengers.")
+        from utils.model_lifecycle import train_and_select_model
+
         train_and_select_model(project_dir)

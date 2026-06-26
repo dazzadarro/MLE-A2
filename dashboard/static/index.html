@@ -3,163 +3,242 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Loan Model Monitoring</title>
+    <title>Assignment 2 Model Governance Overview</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <header class="app-header">
-      <div>
-        <p class="eyebrow">CS611 ASSIGNMENT 2</p>
-        <h1>Loan Default Model Monitoring</h1>
-        <p class="subtitle">Monthly performance, population stability and feature drift</p>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">ML</div>
+        <div>
+          <span>CS611 Assignment 2</span>
+          <strong>Loan Default</strong>
+          <strong>Model Monitoring</strong>
+        </div>
       </div>
-      <div class="header-controls">
-        <label for="month">Snapshot month</label>
-        <select id="month"></select>
-        <button id="refresh" type="button">Refresh</button>
-      </div>
-    </header>
+      <nav>
+        <a class="active" href="#overview">Overview</a>
+        <a href="#governance-section">Model Governance</a>
+        <a href="#performance-section">Performance</a>
+        <a href="#stability-section">Population Stability</a>
+        <a href="#feature-drift-section">Feature Drift</a>
+      </nav>
+      <section class="side-card">
+        <p class="eyebrow">Model Information</p>
+        <dl>
+          <dt>Champion</dt>
+          <dd id="sideModelName">-</dd>
+          <dt>Version</dt>
+          <dd id="sideModelVersion">-</dd>
+          <dt>OOT Window</dt>
+          <dd id="sideOotWindow">-</dd>
+          <dt>Status</dt>
+          <dd><span class="active-pill">Active</span></dd>
+        </dl>
+      </section>
+    </aside>
 
-    <main>
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p>Snapshot Month: <strong id="selectedMonthLabel">-</strong> (Model Evaluation Window)</p>
+        </div>
+        <div class="header-controls">
+          <small id="lastUpdated">Last updated -</small>
+          <button id="refresh" type="button" title="Refresh">Refresh</button>
+          <select id="month" aria-label="Snapshot month"></select>
+        </div>
+      </header>
+
       <section id="emptyState" class="empty-state" hidden></section>
 
       <section id="dashboard" hidden>
-        <div class="status-strip">
-          <div>
-            <span>Champion model</span>
-            <strong id="modelName">-</strong>
+        <section id="overview" class="decision-block">
+          <div class="section-title">
+            <h1>Model Decision</h1>
+            <p id="decisionTitle">-</p>
           </div>
-          <div>
-            <span>Model version</span>
-            <strong id="modelVersion">-</strong>
-          </div>
-          <div>
-            <span>Labels</span>
-            <strong id="labelStatus">-</strong>
-          </div>
-          <div>
-            <span>Data drift</span>
-            <strong id="dataDriftStatus">-</strong>
-          </div>
-          <div>
-            <span>Performance drift</span>
-            <strong id="performanceDriftStatus">-</strong>
-          </div>
-          <div>
-            <span>Monitoring status</span>
-            <strong id="monitoringStatus" class="status">-</strong>
-          </div>
-        </div>
 
-        <section class="kpi-grid">
-          <article class="kpi">
-            <span id="p0Label">P0 Recall</span>
-            <strong id="p0Value">-</strong>
-            <small>Primary business-risk metric</small>
+          <div class="decision-card">
+            <article class="decision-item">
+              <div class="status-icon good">OK</div>
+              <div>
+                <span>Performance</span>
+                <strong id="decisionPerformance">-</strong>
+                <p>P0/P1 remain within the monitored range.</p>
+              </div>
+            </article>
+            <article class="decision-item">
+              <div class="status-icon bad">!</div>
+              <div>
+                <span>Population Drift</span>
+                <strong id="decisionPopulation">-</strong>
+                <p>PSI is monitored against the governance threshold.</p>
+              </div>
+            </article>
+            <article class="decision-item">
+              <div class="status-icon info">CSI</div>
+              <div>
+                <span>Drift Alert</span>
+                <strong id="decisionFeature">-</strong>
+                <p>Feature-level CSI identifies variables for investigation.</p>
+              </div>
+            </article>
+            <article class="decision-item action">
+              <div class="status-icon action-icon">ACT</div>
+              <div>
+                <span>Recommended Action</span>
+                <strong id="decisionAction">-</strong>
+                <p>Detection-only dashboard: review evidence before changing production model.</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="governance-section" class="top-grid">
+          <article class="panel champion-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Champion + Governance</p>
+                <h2>Champion model</h2>
+              </div>
+              <span class="champion-badge">Champion Selected</span>
+            </div>
+            <div class="champion-name" id="modelName">-</div>
+            <div class="meta-row">
+              <span>Version <b id="modelVersion">-</b></span>
+              <span>Labels <b id="labelStatus">-</b></span>
+            </div>
+            <div class="period-box">
+              <span><b id="developmentPeriod">-</b></span>
+              <span><b id="ootWindow">-</b></span>
+            </div>
+            <div class="metric-mini-grid">
+              <article><span>Validation Recall</span><strong id="valRecall">-</strong></article>
+              <article><span>Validation PR-AUC</span><strong id="valPrauc">-</strong></article>
+              <article><span>Governance Score</span><strong id="govScore">-</strong></article>
+              <article><span>Test Recall</span><strong id="testRecall">-</strong></article>
+              <article><span>Test PR-AUC</span><strong id="testPrauc">-</strong></article>
+            </div>
           </article>
-          <article class="kpi">
-            <span id="p1Label">P1 ROC-AUC</span>
-            <strong id="p1Value">-</strong>
-            <small>Threshold-independent ranking</small>
-          </article>
-          <article class="kpi">
-            <span>Population Stability Index</span>
-            <strong id="psiValue">-</strong>
-            <small id="psiInterpretation">Overall score drift</small>
-          </article>
-          <article class="kpi">
-            <span>Loans scored</span>
-            <strong id="predictionCount">-</strong>
-            <small>Selected snapshot month</small>
-          </article>
-          <article class="kpi">
-            <span>Predicted default rate</span>
-            <strong id="predictedRate">-</strong>
-            <small>Champion model decisions</small>
-          </article>
-          <article class="kpi">
-            <span>Observed default rate</span>
-            <strong id="observedRate">-</strong>
-            <small>MOB 6 matured outcomes</small>
+
+          <article class="panel flow-panel">
+            <p class="eyebrow">Governance Pipeline</p>
+            <h2>Governed champion promotion</h2>
+            <div class="flow">
+              <span id="candidateCount">- Candidates</span>
+              <span id="p0Gate">P0 Gate</span>
+              <span>P1 Ranking</span>
+              <span>Simplicity Penalty</span>
+              <span>Champion</span>
+            </div>
+            <p class="panel-note">
+              P0 decides eligibility, P1 decides the winner, and simplicity penalties prevent unnecessarily complex models from replacing a simpler adequate challenger.
+            </p>
+            <p class="formula-note">
+              Governance score = Validation PR-AUC - 0.005 x (simplicity tier - 1) - 0.00005 x feature count.
+            </p>
           </article>
         </section>
 
-        <section class="monitor-grid">
-          <article class="panel performance-panel">
+        <section class="kpi-grid">
+          <article class="kpi"><span>P0 Recall</span><strong id="p0Value">-</strong><small>Primary business-risk metric</small></article>
+          <article class="kpi"><span>P1 PR-AUC</span><strong id="p1Value">-</strong><small>Threshold-independent ranking</small></article>
+          <article class="kpi"><span>PSI</span><strong id="psiValue">-</strong><small id="psiInterpretation">Population stability</small></article>
+          <article class="kpi"><span>Loans scored</span><strong id="predictionCount">-</strong><small>Selected snapshot month</small></article>
+          <article class="kpi"><span>Predicted default rate</span><strong id="predictedRate">-</strong><small>Champion model decisions</small></article>
+          <article class="kpi"><span>Observed default rate</span><strong id="observedRate">-</strong><small>MOB 6 matured outcomes</small></article>
+        </section>
+
+        <section class="main-grid">
+          <article id="stability-section" class="panel chart-panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">PERFORMANCE</p>
-                <h2>P0 and P1 across time</h2>
+                <p class="eyebrow">Stability</p>
+                <h2>PSI over time</h2>
               </div>
               <div class="legend">
-                <span><i class="blue"></i>P0 Recall</span>
-                <span><i class="green"></i>P1 PR-AUC</span>
+                <span><i class="amber"></i>PSI</span>
+                <span><i class="watch-line"></i><span id="psiWatchLabel">Watch</span></span>
+                <span><i class="alert-line"></i><span id="psiAlertLabel">Significant</span></span>
               </div>
             </div>
-            <canvas id="performanceChart" width="900" height="300"></canvas>
+            <canvas id="psiChart"></canvas>
           </article>
 
-          <article class="panel psi-panel">
+          <article id="performance-section" class="panel chart-panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">STABILITY</p>
-                <h2>PSI across time</h2>
+                <p class="eyebrow">Performance</p>
+                <h2>P0 and P1 over time</h2>
               </div>
-              <div class="threshold-key">0.10 watch · 0.25 significant</div>
+              <div class="legend">
+                <span><i class="blue"></i>Recall</span>
+                <span><i class="green"></i>PR-AUC</span>
+                <span><i class="purple"></i>Precision</span>
+              </div>
             </div>
-            <canvas id="psiChart" width="900" height="300"></canvas>
+            <canvas id="performanceChart"></canvas>
           </article>
 
-          <article class="panel drift-panel">
+          <article class="panel confusion-panel">
+            <p class="eyebrow">Decision Quality</p>
+            <h2><span id="matrixMonthLabel">-</span> confusion matrix</h2>
+            <p class="matrix-threshold">Threshold: <span id="matrixThreshold">-</span></p>
+            <div class="matrix-grid">
+              <span></span>
+              <span>Predicted<br />Non-Default</span>
+              <span>Predicted<br />Default</span>
+              <span>Actual<br />Non-Default</span>
+              <b class="tn"><span id="matrixTn">-</span><em>(TN)</em></b>
+              <b class="fp"><span id="matrixFp">-</span><em>(FP)</em></b>
+              <span>Actual<br />Default</span>
+              <b class="fn"><span id="matrixFn">-</span><em>(FN)</em></b>
+              <b class="tp"><span id="matrixTp">-</span><em>(TP)</em></b>
+            </div>
+            <dl class="matrix-stats">
+              <dt>Precision</dt><dd id="matrixPrecision">-</dd>
+              <dt>Recall</dt><dd id="matrixRecall">-</dd>
+              <dt>F1</dt><dd id="matrixF1">-</dd>
+              <dt>Predicted default</dt><dd id="matrixPredRate">-</dd>
+              <dt>Observed default</dt><dd id="matrixObsRate">-</dd>
+            </dl>
+          </article>
+        </section>
+
+        <section class="bottom-grid">
+          <article class="panel alerts-panel">
+            <p class="eyebrow">Drift Alerts</p>
+            <h2>Investigation queue</h2>
+            <div id="alertRows" class="alert-list"></div>
+          </article>
+
+          <article id="feature-drift-section" class="panel feature-panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">COVARIATE SHIFT</p>
-                <h2>Feature-level CSI</h2>
+                <p class="eyebrow">Feature Drift</p>
+                <h2>Top 10 CSI features</h2>
               </div>
-              <div class="drift-counts">
-                <span><b id="watchCount">0</b> watch</span>
-                <span><b id="significantCount">0</b> significant</span>
-              </div>
+              <div class="legend"><span><i class="alert-line"></i><span id="csiAlertLabel">CSI significant</span></span></div>
             </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Feature</th>
-                    <th>CSI</th>
-                    <th>Status</th>
-                    <th>Baseline mean</th>
-                    <th>Current mean</th>
-                  </tr>
-                </thead>
-                <tbody id="driftRows"></tbody>
-              </table>
-            </div>
+            <canvas id="csiChart"></canvas>
           </article>
 
-          <aside class="panel governance-panel">
-            <p class="eyebrow">GOVERNANCE</p>
-            <h2>Decision rules</h2>
-            <div class="rule stable">
-              <strong>Stable</strong>
-              <span>PSI/CSI below 0.10</span>
-              <small>Continue normal monitoring</small>
-            </div>
-            <div class="rule watch">
-              <strong>Watch</strong>
-              <span>PSI/CSI 0.10-0.25</span>
-              <small>Investigate affected population or features</small>
-            </div>
-            <div class="rule alert">
-              <strong>Significant drift</strong>
-              <span>PSI/CSI above 0.25</span>
-              <small>Escalate; assess recalibration or retraining</small>
-            </div>
-            <p class="governance-note">
-              Retraining requires sustained drift or degraded P0/P1 performance.
-              A single breach initiates investigation, not automatic replacement.
-            </p>
-          </aside>
+          <article id="leaderboard-section" class="panel leaderboard-panel">
+            <p class="eyebrow">Challengers</p>
+            <h2>Validation leaderboard</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Val Recall</th>
+                  <th>Val PR-AUC</th>
+                  <th>Governance</th>
+                </tr>
+              </thead>
+              <tbody id="leaderboardRows"></tbody>
+            </table>
+          </article>
         </section>
       </section>
     </main>

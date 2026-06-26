@@ -31,7 +31,7 @@ services:
     environment: *airflow-environment
     volumes: *airflow-volumes
     ports:
-      - "8082:8080"
+      - "8080:8080"
     command: webserver
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]

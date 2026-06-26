@@ -1,4 +1,3 @@
-import math
 import re
 from pathlib import Path
 
@@ -6,6 +5,7 @@ import pyspark.sql.functions as F
 from pyspark.sql import Row
 from pyspark.sql.functions import col
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
+from pyspark.sql.window import Window
 
 
 LEAKAGE_COLUMNS = {
@@ -175,65 +175,40 @@ def build_label_store(loan_daily, loan_application):
     )
 
 
-def _date_from_string(value):
-    return value if value else None
+def assign_data_split(feature_store, label_store):
+    # Assignment 2 split policy:
+    # - Jan-Dec 2023 loans form the model-development cohort.
+    # - Within 2023, loans are split 80/10/10 at loan level, stratified by label.
+    # - Jan-Dec 2024 loans are OOT monitoring only and are never used for model selection.
+    if label_store is None:
+        raise ValueError("label_store is required for the stratified loan-level Assignment 2 split.")
 
+    split_date = F.coalesce(F.to_date(col("loan_start_date")), F.to_date(col("snapshot_date")))
+    split_source = (
+        feature_store.select("loan_id", "loan_start_date", "snapshot_date")
+        .join(label_store.select("loan_id", "label"), "loan_id", "left")
+        .withColumn("split_year", F.year(split_date))
+        .withColumn("split_hash", F.xxhash64(col("loan_id")))
+    )
 
-def _validate_override_dates(dates, override_map):
-    available = {str(date) for date in dates}
-    missing = {name: value for name, value in override_map.items() if value and value not in available}
-    if missing:
-        formatted = ", ".join([f"{name}={value}" for name, value in missing.items()])
-        raise ValueError(f"Split override date(s) not present in feature_store snapshot dates: {formatted}")
+    stratified_window = Window.partitionBy("label").orderBy(col("split_hash"), col("loan_id"))
+    labelled_2023 = (
+        split_source.filter(col("split_year") == 2023)
+        .withColumn("row_num", F.row_number().over(stratified_window))
+        .withColumn("label_count", F.count("*").over(Window.partitionBy("label")))
+        .withColumn("split_fraction", (col("row_num") - F.lit(1)) / col("label_count"))
+        .withColumn(
+            "data_split",
+            F.when(col("split_fraction") < 0.80, "train")
+            .when(col("split_fraction") < 0.90, "validation")
+            .otherwise("test"),
+        )
+        .select("loan_id", "data_split")
+    )
 
-
-def _build_split_mapping(feature_store, spark, validation_date=None, test_date=None, oot_date=None):
-    date_rows = feature_store.select("snapshot_date").distinct().orderBy("snapshot_date").collect()
-    dates = [row["snapshot_date"] for row in date_rows]
-    if len(dates) < 4:
-        raise ValueError("At least 4 distinct application snapshot dates are required for train/validation/test/OOT split.")
-
-    override_map = {
-        "validation_date": _date_from_string(validation_date),
-        "test_date": _date_from_string(test_date),
-        "oot_date": _date_from_string(oot_date),
-    }
-    _validate_override_dates(dates, override_map)
-
-    oot_value = oot_date or str(dates[-1])
-    non_oot_dates = [date for date in dates if str(date) != oot_value]
-
-    n_dates = len(non_oot_dates)
-    train_cut = max(1, math.floor(n_dates * 0.8))
-    validation_cut = max(train_cut + 1, math.floor(n_dates * 0.9))
-    validation_cut = min(validation_cut, n_dates - 1)
-
-    split_by_date = {}
-    for date in non_oot_dates[:train_cut]:
-        split_by_date[str(date)] = "train"
-    for date in non_oot_dates[train_cut:validation_cut]:
-        split_by_date[str(date)] = "validation"
-    for date in non_oot_dates[validation_cut:]:
-        split_by_date[str(date)] = "test"
-    split_by_date[oot_value] = "oot"
-
-    # Explicit dates win over the automatic chronological assignment.
-    if validation_date:
-        split_by_date[validation_date] = "validation"
-    if test_date:
-        split_by_date[test_date] = "test"
-    if oot_date:
-        split_by_date[oot_date] = "oot"
-
-    rows = [(date_value, split_name) for date_value, split_name in split_by_date.items()]
-    return spark.createDataFrame(rows, ["snapshot_date_str", "data_split"]).withColumn(
-        "snapshot_date", F.to_date(col("snapshot_date_str"))
-    ).drop("snapshot_date_str")
-
-
-def assign_data_split(feature_store, spark, validation_date=None, test_date=None, oot_date=None):
-    split_mapping = _build_split_mapping(feature_store, spark, validation_date, test_date, oot_date)
-    return feature_store.join(F.broadcast(split_mapping), "snapshot_date", "left")
+    oot = split_source.filter(col("split_year") >= 2024).select("loan_id", F.lit("oot").alias("data_split"))
+    split_mapping = labelled_2023.unionByName(oot)
+    return feature_store.join(F.broadcast(split_mapping), "loan_id", "inner")
 
 
 def _numeric_feature_columns(df):
@@ -446,16 +421,9 @@ def build_gold_tables(
     spark,
     start_date=None,
     end_date=None,
-    validation_date=None,
-    test_date=None,
-    oot_date=None,
-    split_mode="auto_chronological_80_10_10_oot",
     profile=False,
     skip_model_feature_store=False,
 ):
-    if split_mode != "auto_chronological_80_10_10_oot":
-        raise ValueError("Only split_mode='auto_chronological_80_10_10_oot' is currently supported.")
-
     attributes = _read_silver(project_dir, "attributes", spark)
     financials = _read_silver(project_dir, "financials", spark)
     clickstream = _read_silver(project_dir, "clickstream", spark)
@@ -516,7 +484,9 @@ def build_gold_tables(
     if leakage_present:
         raise ValueError(f"Leakage columns found in feature_store: {leakage_present}")
 
-    feature_store = assign_data_split(feature_store, spark, validation_date, test_date, oot_date)
+    label_store = build_label_store(loan_daily, loan_application)
+
+    feature_store = assign_data_split(feature_store, label_store)
 
     feature_output_path = Path(project_dir) / "datamart" / "gold" / "feature_store"
     feature_store = _materialize_parquet(feature_store, feature_output_path, ["data_split", "snapshot_date"])
@@ -525,7 +495,6 @@ def build_gold_tables(
         message = f"{message} ({feature_store.count():,} rows)"
     print(message)
 
-    label_store = build_label_store(loan_daily, loan_application)
     label_output_path = Path(project_dir) / "datamart" / "gold" / "label_store"
     label_store = _materialize_parquet(label_store, label_output_path, ["snapshot_date"])
     message = f"gold/label_store -> {label_output_path}"

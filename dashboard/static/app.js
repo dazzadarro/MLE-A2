@@ -1,51 +1,222 @@
 const monthSelect = document.querySelector("#month");
 const dashboard = document.querySelector("#dashboard");
 const emptyState = document.querySelector("#emptyState");
+let cachedPayload = null;
 
-const fmt = (value, digits = 3) =>
-  value === null || value === undefined
-    ? "Pending"
-    : Number(value).toFixed(digits);
+const fmt = (value, digits = 3) => {
+  const number = numericValue(value);
+  return number === null ? "-" : number.toFixed(digits);
+};
 
-const pct = (value) =>
-  value === null || value === undefined
-    ? "Pending"
-    : `${(Number(value) * 100).toFixed(1)}%`;
+const pct = (value) => {
+  const number = numericValue(value);
+  return number === null ? "-" : `${(number * 100).toFixed(1)}%`;
+};
+
+function numericValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
 
 function setText(id, value) {
   document.querySelector(`#${id}`).textContent = value;
 }
 
-function chart(canvas, rows, series, thresholds = []) {
+function monthLabel(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 7);
+  const month = date.toLocaleString("en-US", { month: "short" });
+  const year = String(date.getFullYear()).slice(-2);
+  return `${month}-${year}`;
+}
+
+function normalizeStatus(status) {
+  return String(status || "unknown").replaceAll("_", " ");
+}
+
+function compactRangeLabel(label) {
+  return String(label || "-").replace(/\b([A-Z][a-z]{2}) (\d{4})-([A-Z][a-z]{2}) \2\b/g, "$1-$3 $2");
+}
+
+function compactDevelopmentLabel(payload) {
+  const splits = payload.split_summary || {};
+  if (splits.train || splits.validation || splits.test) {
+    const labels = [splits.train?.label, splits.validation?.label, splits.test?.label].filter(Boolean);
+    if (labels.length === 3 && new Set(labels).size === 1) {
+      return `Development: ${compactRangeLabel(labels[0])} loan-level 80/10/10`;
+    }
+    const parts = [];
+    if (splits.train?.label) parts.push(`Train ${compactRangeLabel(splits.train.label)}`);
+    if (splits.validation?.label) parts.push(`Validation ${compactRangeLabel(splits.validation.label)}`);
+    if (splits.test?.label) parts.push(`Test ${compactRangeLabel(splits.test.label)}`);
+    return `Development: ${parts.join(" | ")}`;
+  }
+  return `Development: ${compactRangeLabel(payload.period_summary?.development_period || "-")}`;
+}
+
+function compactOotLabel(payload) {
+  const label = payload.split_summary?.oot?.label || payload.period_summary?.oot_window || "-";
+  return `OOT monitoring: ${compactRangeLabel(label)}`;
+}
+
+function statusTone(status) {
+  if (status === "stable" || status === "pass") return "stable";
+  if (status === "watch") return "watch";
+  if (status === "significant_drift" || status === "fail") return "alert";
+  return "neutral";
+}
+
+function isOotOrHoldout(row) {
+  const split = String(row.data_split || "").toLowerCase();
+  return ["validation", "test", "oot"].includes(split);
+}
+
+function selectedChampionMetrics(payload) {
+  const championName = payload.registry?.champion_model || payload.summary?.model_name;
+  const rows = payload.evaluation || [];
+  const validation = rows.find(
+    (row) => row.model_name === championName && String(row.dataset).toLowerCase() === "validation"
+  );
+  const test = rows.find(
+    (row) => row.model_name === championName && String(row.dataset).toLowerCase() === "test"
+  );
+
+  return {
+    validation_recall:
+      numericValue(validation?.p0_metric_value) ??
+      numericValue(validation?.recall) ??
+      null,
+    validation_pr_auc:
+      numericValue(validation?.p1_metric_value) ??
+      numericValue(validation?.pr_auc) ??
+      null,
+    governance_score:
+      numericValue(validation?.governance_score) ?? null,
+    test_recall:
+      numericValue(test?.p0_metric_value) ?? numericValue(test?.recall) ?? null,
+    test_pr_auc:
+      numericValue(test?.p1_metric_value) ?? numericValue(test?.pr_auc) ?? null,
+  };
+}
+
+function leaderboardRows(payload) {
+  const validationRows = (payload.evaluation || [])
+    .filter((row) => String(row.dataset).toLowerCase() === "validation")
+    .map((row) => ({
+      name: displayModelName(row),
+      recall: numericValue(row.p0_metric_value) ?? numericValue(row.recall),
+      pr_auc: numericValue(row.p1_metric_value) ?? numericValue(row.pr_auc),
+      governance: numericValue(row.governance_score),
+      family: row.model_family || row.base_model_name || row.model_name,
+    }))
+    .filter((row) => row.recall !== null && row.pr_auc !== null && row.governance !== null);
+
+  if (!validationRows.length) return [];
+
+  const bestByFamily = new Map();
+  validationRows.forEach((row) => {
+    const current = bestByFamily.get(row.family);
+    if (!current || row.governance > current.governance) bestByFamily.set(row.family, row);
+  });
+
+  return [...bestByFamily.values()]
+    .sort((a, b) => b.governance - a.governance)
+    .slice(0, 4)
+    .map((row) => [row.name, row.recall, row.pr_auc, row.governance]);
+}
+
+function displayModelName(row) {
+  const raw = row.base_model_name || row.model_family || row.model_name || "Model";
+  return displayRawModelName(raw);
+}
+
+function displayRawModelName(raw) {
+  const cleaned = String(raw)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+  if (cleaned.toLowerCase().includes("hist gradient")) return "HGB Compact";
+  if (cleaned.toLowerCase().includes("xgboost")) return "XGBoost";
+  if (cleaned.toLowerCase().includes("random forest")) return "Random Forest";
+  if (cleaned.toLowerCase().includes("logistic regression")) return "Logistic Regression";
+  return cleaned;
+}
+
+function resizeCanvas(canvas, height = 285) {
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(canvas.clientWidth, 320);
+  canvas.width = Math.floor(width * ratio);
+  canvas.height = Math.floor(height * ratio);
   const ctx = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
-  const pad = { left: 56, right: 18, top: 18, bottom: 42 };
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return { ctx, width, height };
+}
+
+function drawLineChart(canvas, rows, series, options = {}) {
+  const { ctx, width, height } = resizeCanvas(canvas, options.height || 285);
+  const pad = { left: 44, right: 22, top: 18, bottom: 38 };
   ctx.clearRect(0, 0, width, height);
-  ctx.strokeStyle = "#d7dde7";
+  ctx.font = "11px Inter, Segoe UI, sans-serif";
   ctx.lineWidth = 1;
-  ctx.font = "11px Segoe UI";
-  ctx.fillStyle = "#667085";
 
   const values = rows.flatMap((row) =>
-    series.map((item) => Number(row[item.key])).filter(Number.isFinite)
+    series.map((item) => numericValue(row[item.key])).filter((value) => value !== null)
   );
-  const thresholdValues = thresholds.map((item) => item.value);
-  const max = Math.max(1, ...values, ...thresholdValues);
-  const min = 0;
+  const thresholds = options.thresholds || [];
+  const rawMax = Math.max(0.1, ...values, ...thresholds.map((item) => item.value));
+  const step = options.tickStep || 0.25;
+  const yMax = options.yMax || Math.ceil(rawMax / step) * step;
   const x = (index) =>
     pad.left + (index * (width - pad.left - pad.right)) / Math.max(rows.length - 1, 1);
   const y = (value) =>
-    pad.top + ((max - value) * (height - pad.top - pad.bottom)) / (max - min);
+    pad.top + ((yMax - value) * (height - pad.top - pad.bottom)) / yMax;
 
-  for (let step = 0; step <= 4; step += 1) {
-    const value = min + ((max - min) * step) / 4;
+  if (options.developmentUntil) {
+    const boundaryIndex = rows.findIndex((row) => new Date(row.snapshot_date) > new Date(options.developmentUntil));
+    if (boundaryIndex > 0) {
+      const boundaryX = x(boundaryIndex - 0.5);
+      ctx.fillStyle = "rgba(102, 112, 133, 0.08)";
+      ctx.fillRect(pad.left, pad.top, boundaryX - pad.left, height - pad.top - pad.bottom);
+      ctx.strokeStyle = "rgba(102, 112, 133, 0.55)";
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(boundaryX, pad.top);
+      ctx.lineTo(boundaryX, height - pad.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#667085";
+      ctx.font = "10px Inter, Segoe UI, sans-serif";
+      ctx.fillText("2023 dev", pad.left + 4, pad.top + 12);
+      ctx.fillText("OOT", boundaryX + 6, pad.top + 12);
+      ctx.font = "11px Inter, Segoe UI, sans-serif";
+    }
+  }
+
+  if (options.highlightKey) {
+    rows.forEach((row, index) => {
+      const value = numericValue(row[options.highlightKey]);
+      const highlightAbove = numericValue(options.highlightAbove);
+      if (value === null || highlightAbove === null || value <= highlightAbove) return;
+      const nextX = rows.length > 1 ? x(Math.min(index + 1, rows.length - 1)) : width - pad.right;
+      const previousX = rows.length > 1 ? x(Math.max(index - 1, 0)) : pad.left;
+      const bandWidth = Math.max(16, (nextX - previousX) / 2);
+      ctx.fillStyle = "rgba(197, 59, 50, 0.07)";
+      ctx.fillRect(x(index) - bandWidth / 2, pad.top, bandWidth, height - pad.top - pad.bottom);
+    });
+  }
+
+  const tickCount = Math.round(yMax / step);
+  for (let i = 0; i <= tickCount; i += 1) {
+    const value = Number((i * step).toFixed(10));
     const py = y(value);
+    ctx.strokeStyle = "#e5e9f0";
     ctx.beginPath();
     ctx.moveTo(pad.left, py);
     ctx.lineTo(width - pad.right, py);
     ctx.stroke();
-    ctx.fillText(value.toFixed(2), 10, py + 4);
+    ctx.fillStyle = "#667085";
+    ctx.fillText(value.toFixed(2), 8, py + 4);
   }
 
   thresholds.forEach((item) => {
@@ -66,8 +237,8 @@ function chart(canvas, rows, series, thresholds = []) {
     ctx.beginPath();
     let started = false;
     rows.forEach((row, index) => {
-      const value = Number(row[item.key]);
-      if (!Number.isFinite(value)) return;
+      const value = numericValue(row[item.key]);
+      if (value === null) return;
       if (!started) {
         ctx.moveTo(x(index), y(value));
         started = true;
@@ -77,29 +248,108 @@ function chart(canvas, rows, series, thresholds = []) {
     });
     ctx.stroke();
     rows.forEach((row, index) => {
-      const value = Number(row[item.key]);
-      if (!Number.isFinite(value)) return;
+      const value = numericValue(row[item.key]);
+      if (value === null) return;
       ctx.beginPath();
-      ctx.arc(x(index), y(value), 4, 0, Math.PI * 2);
+      ctx.arc(x(index), y(value), item.radius || 4, 0, Math.PI * 2);
       ctx.fill();
     });
   });
 
   ctx.fillStyle = "#667085";
   rows.forEach((row, index) => {
-    if (index % Math.max(Math.ceil(rows.length / 8), 1) !== 0 && index !== rows.length - 1) return;
-    const label = String(row.snapshot_date).slice(0, 7);
-    ctx.fillText(label, x(index) - 18, height - 16);
+    const labelEvery = options.labelEvery || (rows.length > 16 ? 3 : 2);
+    if (rows.length > 8 && index % labelEvery !== 0 && index !== rows.length - 1) return;
+    ctx.fillText(monthLabel(row.snapshot_date), x(index) - 18, height - 12);
   });
+}
+
+function drawBarChart(canvas, rows, significantCutoff) {
+  const { ctx, width, height } = resizeCanvas(canvas, 285);
+  const pad = { left: 120, right: 20, top: 14, bottom: 24 };
+  const topRows = rows.slice(0, 10);
+  const cutoff = numericValue(significantCutoff);
+  const max = Math.max(cutoff || 0, ...topRows.map((row) => numericValue(row.csi) || 0));
+  const barGap = 8;
+  const barHeight = Math.max(14, (height - pad.top - pad.bottom) / topRows.length - barGap);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.font = "11px Inter, Segoe UI, sans-serif";
+  topRows.forEach((row, index) => {
+    const value = numericValue(row.csi) || 0;
+    const y = pad.top + index * (barHeight + barGap);
+    const barWidth = ((width - pad.left - pad.right) * value) / max;
+    ctx.fillStyle = "#344054";
+    ctx.fillText(String(row.feature_name).slice(0, 18), 8, y + barHeight - 3);
+    ctx.fillStyle = cutoff !== null && value > cutoff ? "#c53b32" : "#b7791f";
+    ctx.fillRect(pad.left, y, barWidth, barHeight);
+    ctx.fillStyle = "#172033";
+    ctx.fillText(value.toFixed(3), pad.left + barWidth + 6, y + barHeight - 3);
+  });
+}
+
+function renderAlerts(summary, thresholds) {
+  const watchCutoff = numericValue(thresholds?.stable_upper);
+  const significantCutoff = numericValue(thresholds?.watch_upper);
+  const rows = [
+    [
+      `PSI > ${fmt(significantCutoff, 2)}`,
+      significantCutoff !== null && summary.psi > significantCutoff ? "Triggered" : "Not triggered",
+      significantCutoff !== null && summary.psi > significantCutoff ? "alert" : "stable",
+    ],
+    [
+      `PSI watch > ${fmt(watchCutoff, 2)}`,
+      watchCutoff !== null && summary.psi > watchCutoff ? "Triggered" : "Not triggered",
+      watchCutoff !== null && summary.psi > watchCutoff ? "watch" : "stable",
+    ],
+    [
+      `CSI > ${fmt(significantCutoff, 2)}`,
+      `${summary.significant_feature_count || 0} features`,
+      (summary.significant_feature_count || 0) > 0 ? "alert" : "stable",
+    ],
+    [
+      "Performance drift",
+      summary.performance_drift_status === "stable" ? "Not detected" : normalizeStatus(summary.performance_drift_status),
+      summary.performance_drift_status === "stable" ? "stable" : "watch",
+    ],
+    ["Retraining trigger", "Not met", "stable"],
+    ["Action", "Investigate data drift", "watch"],
+  ];
+
+  const host = document.querySelector("#alertRows");
+  host.replaceChildren();
+  rows.forEach(([label, value, tone]) => {
+    const item = document.createElement("div");
+    item.className = `alert-row ${tone}`;
+    item.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+    host.appendChild(item);
+  });
+}
+
+function renderConfusionMatrix(matrix) {
+  const cm = matrix || {};
+  setText("matrixTn", cm.available ? Number(cm.tn || 0).toLocaleString() : "-");
+  setText("matrixFp", cm.available ? Number(cm.fp || 0).toLocaleString() : "-");
+  setText("matrixFn", cm.available ? Number(cm.fn || 0).toLocaleString() : "-");
+  setText("matrixTp", cm.available ? Number(cm.tp || 0).toLocaleString() : "-");
+  setText("matrixThreshold", fmt(cm.threshold, 2));
+  setText("matrixPrecision", fmt(cm.precision));
+  setText("matrixRecall", fmt(cm.recall));
+  setText("matrixF1", fmt(cm.f1_score));
+  setText("matrixPredRate", pct(cm.predicted_default_rate));
+  setText("matrixObsRate", pct(cm.observed_default_rate));
 }
 
 function render(payload) {
   if (!payload.ready) {
+    cachedPayload = null;
     dashboard.hidden = true;
     emptyState.hidden = false;
     emptyState.textContent = payload.message;
     return;
   }
+
+  cachedPayload = payload;
   dashboard.hidden = false;
   emptyState.hidden = true;
 
@@ -107,66 +357,150 @@ function render(payload) {
     payload.months.forEach((month) => {
       const option = document.createElement("option");
       option.value = month;
-      option.textContent = month.slice(0, 7);
+      option.textContent = monthLabel(month);
       monthSelect.appendChild(option);
     });
   }
   monthSelect.value = payload.selected_month;
 
   const s = payload.summary;
-  setText("modelName", s.model_name || "-");
+  const thresholds = payload.thresholds || {};
+  const stableCutoff = numericValue(thresholds.stable_upper);
+  const significantCutoff = numericValue(thresholds.watch_upper);
+  const metrics = selectedChampionMetrics(payload);
+  const featureAlert = (s.significant_feature_count || 0) > 0;
+  const populationWatch =
+    s.data_drift_status === "watch" ||
+    (stableCutoff !== null && (s.psi || 0) > stableCutoff);
+  const populationAlert =
+    s.data_drift_status === "significant_drift" ||
+    (significantCutoff !== null && (s.psi || 0) > significantCutoff);
+  const performanceStable = s.performance_drift_status === "stable";
+  const action = performanceStable && (populationAlert || populationWatch || featureAlert)
+    ? "Investigate data drift; retraining trigger not met"
+    : performanceStable
+      ? "Continue Monitoring"
+      : "Escalate Performance Review";
+  let decisionTitle = "Model operating within expected range.";
+  if (!performanceStable) {
+    decisionTitle = "Performance review required.";
+  } else if (populationAlert || populationWatch || featureAlert) {
+    decisionTitle = "Performance stable, but data drift requires investigation.";
+  }
+
+  setText("selectedMonthLabel", monthLabel(payload.selected_month));
+  setText("lastUpdated", `Last updated: ${new Date().toLocaleString()}`);
+  setText("decisionTitle", decisionTitle);
+  setText("candidateCount", `${Number(payload.registry?.candidate_count || 0).toLocaleString()} Candidates`);
+  setText("p0Gate", "P0 Gate");
+  setText("sideOotWindow", payload.period_summary?.oot_window || "-");
+  setText("developmentPeriod", compactDevelopmentLabel(payload));
+  setText("ootWindow", compactOotLabel(payload));
+  setText("matrixMonthLabel", payload.period_summary?.selected_month_label || monthLabel(payload.selected_month));
+  setText("psiWatchLabel", `${fmt(stableCutoff, 2)} watch`);
+  setText("psiAlertLabel", `${fmt(significantCutoff, 2)} significant`);
+  setText("csiAlertLabel", `CSI > ${fmt(significantCutoff, 2)}`);
+  setText("sideModelName", s.model_name ? displayRawModelName(s.model_name) : "-");
+  setText("sideModelVersion", s.model_version || "-");
+  setText("modelName", s.model_name ? displayRawModelName(s.model_name) : "-");
   setText("modelVersion", s.model_version || "-");
-  setText("labelStatus", String(s.observation_status).replaceAll("_", " "));
-  setText("dataDriftStatus", String(s.data_drift_status).replaceAll("_", " "));
-  setText("performanceDriftStatus", String(s.performance_drift_status).replaceAll("_", " "));
-  setText("monitoringStatus", String(s.monitoring_status).replaceAll("_", " "));
-  document.querySelector("#monitoringStatus").className = `status ${s.monitoring_status}`;
-  setText("p0Label", `P0 ${String(s.p0_name).replaceAll("_", " ")}`);
+  setText("labelStatus", normalizeStatus(s.observation_status));
+  setText("decisionPerformance", performanceStable ? "Stable" : normalizeStatus(s.performance_drift_status));
+  setText("decisionPopulation", populationAlert ? "Significant" : populationWatch ? "Watch" : "Stable");
+  let driftAlertText = "No significant feature drift";
+  if (populationAlert && featureAlert) {
+    driftAlertText = "Significant PSI/CSI detected";
+  } else if (populationAlert) {
+    driftAlertText = "Significant PSI detected";
+  } else if (featureAlert) {
+    driftAlertText = "Significant CSI detected";
+  }
+  setText("decisionFeature", driftAlertText);
+  setText("decisionAction", action);
+
+  ["decisionPerformance", "decisionPopulation", "decisionFeature", "decisionAction"].forEach((id) => {
+    const node = document.querySelector(`#${id}`);
+    node.className = "";
+    if (id === "decisionPerformance") node.classList.add(performanceStable ? "text-stable" : "text-alert");
+    if (id === "decisionPopulation") node.classList.add(populationAlert ? "text-alert" : populationWatch ? "text-watch" : "text-stable");
+    if (id === "decisionFeature") node.classList.add(featureAlert ? "text-alert" : "text-stable");
+    if (id === "decisionAction") node.classList.add("text-watch");
+  });
+
+  setText("valRecall", fmt(metrics.validation_recall));
+  setText("valPrauc", fmt(metrics.validation_pr_auc));
+  setText("govScore", fmt(metrics.governance_score));
+  setText("testRecall", fmt(metrics.test_recall));
+  setText("testPrauc", fmt(metrics.test_pr_auc));
+
   setText("p0Value", fmt(s.p0_value));
-  setText("p1Label", `P1 ${String(s.p1_name).replaceAll("_", " ")}`);
   setText("p1Value", fmt(s.p1_value));
   setText("psiValue", fmt(s.psi));
-  setText("predictionCount", Number(s.prediction_count).toLocaleString());
+  setText("predictionCount", Number(s.prediction_count || 0).toLocaleString());
   setText("predictedRate", pct(s.predicted_default_rate));
   setText("observedRate", pct(s.observed_default_rate));
-  setText("watchCount", s.watch_feature_count);
-  setText("significantCount", s.significant_feature_count);
+  setText(
+    "psiInterpretation",
+    stableCutoff === null || significantCutoff === null
+      ? "-"
+      : s.psi < stableCutoff
+        ? `Stable: below ${fmt(stableCutoff, 2)}`
+        : s.psi <= significantCutoff
+          ? `Watch: ${fmt(stableCutoff, 2)}-${fmt(significantCutoff, 2)}`
+          : `Significant: above ${fmt(significantCutoff, 2)}`
+  );
 
-  const psiText =
-    s.psi === null ? "Population labels unavailable" :
-    s.psi < 0.1 ? "Stable: below 0.10" :
-    s.psi <= 0.25 ? "Watch: moderate drift" :
-    "Significant drift";
-  setText("psiInterpretation", psiText);
+  const monitoredRows = (payload.performance || []).filter(isOotOrHoldout);
+  const psiThresholds = [
+    stableCutoff !== null ? { value: stableCutoff, color: "#b7791f" } : null,
+    significantCutoff !== null ? { value: significantCutoff, color: "#c53b32" } : null,
+  ].filter(Boolean);
 
-  chart(
+  drawLineChart(
+    document.querySelector("#psiChart"),
+    monitoredRows,
+    [{ key: "psi", color: "#b7791f" }],
+    {
+      tickStep: 0.1,
+      thresholds: psiThresholds,
+      highlightKey: "psi",
+      highlightAbove: stableCutoff,
+      developmentUntil: "2023-12-31",
+      labelEvery: 3,
+    }
+  );
+  drawLineChart(
     document.querySelector("#performanceChart"),
-    payload.performance,
+    monitoredRows,
     [
       { key: "p0_metric_value", color: "#2764c4" },
       { key: "p1_metric_value", color: "#25835b" },
-    ]
+      { key: "precision", color: "#6941c6", radius: 3 },
+    ],
+    {
+      tickStep: 0.25,
+      yMax: 1,
+      thresholds: numericValue(payload.p0_minimum) !== null
+        ? [{ value: numericValue(payload.p0_minimum), color: "#c53b32" }]
+        : [],
+      developmentUntil: "2023-12-31",
+      labelEvery: 3,
+    }
   );
-  chart(
-    document.querySelector("#psiChart"),
-    payload.performance,
-    [{ key: "psi", color: "#b7791f" }],
-    [
-      { value: 0.1, color: "#b7791f" },
-      { value: 0.25, color: "#c53b32" },
-    ]
-  );
+  drawBarChart(document.querySelector("#csiChart"), payload.drift || [], significantCutoff);
 
-  const tbody = document.querySelector("#driftRows");
+  renderConfusionMatrix(payload.confusion_matrix);
+  renderAlerts(s, thresholds);
+
+  const tbody = document.querySelector("#leaderboardRows");
   tbody.replaceChildren();
-  payload.drift.forEach((row) => {
+  leaderboardRows(payload).forEach(([name, recall, prAuc, governance]) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row.feature_name}</td>
-      <td>${fmt(row.csi)}</td>
-      <td><span class="badge ${row.drift_status}">${row.drift_status.replaceAll("_", " ")}</span></td>
-      <td>${fmt(row.baseline_mean)}</td>
-      <td>${fmt(row.current_mean)}</td>
+      <td>${name}</td>
+      <td>${fmt(recall)}</td>
+      <td>${fmt(prAuc)}</td>
+      <td>${fmt(governance)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -180,4 +514,13 @@ async function load() {
 
 monthSelect.addEventListener("change", load);
 document.querySelector("#refresh").addEventListener("click", load);
+document.querySelectorAll("nav a[href^='#']").forEach((link) => {
+  link.addEventListener("click", () => {
+    document.querySelectorAll("nav a").forEach((item) => item.classList.remove("active"));
+    link.classList.add("active");
+  });
+});
+window.addEventListener("resize", () => {
+  if (cachedPayload) render(cachedPayload);
+});
 load();
