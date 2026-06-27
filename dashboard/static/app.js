@@ -32,6 +32,14 @@ function monthLabel(value) {
   return `${month}-${year}`;
 }
 
+function chartMonthLabel(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 7);
+  const month = date.toLocaleString("en-US", { month: "short" });
+  return `${month} ${date.getFullYear()}`;
+}
+
 function normalizeStatus(status) {
   return String(status || "unknown").replaceAll("_", " ");
 }
@@ -70,7 +78,12 @@ function statusTone(status) {
 
 function isOotOrHoldout(row) {
   const split = String(row.data_split || "").toLowerCase();
-  return ["validation", "test", "oot"].includes(split);
+  return ["validation", "test", "oot", "prediction"].includes(split);
+}
+
+function isDeployedMonitoringRow(row) {
+  const split = String(row.data_split || "").toLowerCase();
+  return ["oot", "prediction"].includes(split);
 }
 
 function selectedChampionMetrics(payload) {
@@ -155,7 +168,7 @@ function resizeCanvas(canvas, height = 285) {
 
 function drawLineChart(canvas, rows, series, options = {}) {
   const { ctx, width, height } = resizeCanvas(canvas, options.height || 285);
-  const pad = { left: 44, right: 22, top: 18, bottom: 38 };
+  const pad = { left: 44, right: 26, top: 24, bottom: 40 };
   ctx.clearRect(0, 0, width, height);
   ctx.font = "11px Inter, Segoe UI, sans-serif";
   ctx.lineWidth = 1;
@@ -189,6 +202,43 @@ function drawLineChart(canvas, rows, series, options = {}) {
       ctx.font = "10px Inter, Segoe UI, sans-serif";
       ctx.fillText("2023 dev", pad.left + 4, pad.top + 12);
       ctx.fillText("OOT", boundaryX + 6, pad.top + 12);
+      ctx.font = "11px Inter, Segoe UI, sans-serif";
+    }
+  }
+
+  if (options.deploymentMarker && rows.length) {
+    const markerIndex = Math.max(0, rows.findIndex((row) => {
+      const rowDate = new Date(row.snapshot_date);
+      return rowDate >= new Date(options.deploymentMarker);
+    }));
+    const markerX = x(markerIndex);
+    if (options.shadeFromDeployment) {
+      ctx.fillStyle = "rgba(197, 59, 50, 0.06)";
+      ctx.fillRect(markerX, pad.top, width - pad.right - markerX, height - pad.top - pad.bottom);
+    }
+    ctx.strokeStyle = "rgba(96, 112, 138, 0.42)";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(markerX, pad.top);
+    ctx.lineTo(markerX, height - pad.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (options.deploymentLabel) {
+      const boxWidth = 78;
+      const boxHeight = 34;
+      const boxX = Math.min(Math.max(markerX - boxWidth / 2, pad.left + 4), width - pad.right - boxWidth - 4);
+      const boxY = pad.top + 10;
+      ctx.fillStyle = "#eef2f7";
+      ctx.strokeStyle = "#d7dfeb";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#0b2a59";
+      ctx.font = "700 9px Inter, Segoe UI, sans-serif";
+      ctx.fillText("DEPLOYMENT", boxX + 11, boxY + 13);
+      ctx.fillText(options.deploymentLabel, boxX + 17, boxY + 26);
       ctx.font = "11px Inter, Segoe UI, sans-serif";
     }
   }
@@ -253,6 +303,15 @@ function drawLineChart(canvas, rows, series, options = {}) {
       ctx.beginPath();
       ctx.arc(x(index), y(value), item.radius || 4, 0, Math.PI * 2);
       ctx.fill();
+      if (options.showPointLabels) {
+        const label = value.toFixed(item.labelDigits ?? 3);
+        ctx.save();
+        ctx.font = "700 9px Inter, Segoe UI, sans-serif";
+        ctx.fillStyle = item.color;
+        const yOffset = item.labelOffset ?? -10;
+        ctx.fillText(label, x(index) - ctx.measureText(label).width / 2, y(value) + yOffset);
+        ctx.restore();
+      }
     });
   });
 
@@ -260,7 +319,8 @@ function drawLineChart(canvas, rows, series, options = {}) {
   rows.forEach((row, index) => {
     const labelEvery = options.labelEvery || (rows.length > 16 ? 3 : 2);
     if (rows.length > 8 && index % labelEvery !== 0 && index !== rows.length - 1) return;
-    ctx.fillText(monthLabel(row.snapshot_date), x(index) - 18, height - 12);
+    const label = options.fullMonthLabels ? chartMonthLabel(row.snapshot_date) : monthLabel(row.snapshot_date);
+    ctx.fillText(label, x(index) - 18, height - 12);
   });
 }
 
@@ -450,7 +510,8 @@ function render(payload) {
           : `Significant: above ${fmt(significantCutoff, 2)}`
   );
 
-  const monitoredRows = (payload.performance || []).filter(isOotOrHoldout);
+  const deployedRows = (payload.performance || []).filter(isDeployedMonitoringRow);
+  const monitoredRows = deployedRows.length ? deployedRows : (payload.performance || []).filter(isOotOrHoldout);
   const psiThresholds = [
     stableCutoff !== null ? { value: stableCutoff, color: "#b7791f" } : null,
     significantCutoff !== null ? { value: significantCutoff, color: "#c53b32" } : null,
@@ -464,9 +525,13 @@ function render(payload) {
       tickStep: 0.1,
       thresholds: psiThresholds,
       highlightKey: "psi",
-      highlightAbove: stableCutoff,
-      developmentUntil: "2023-12-31",
-      labelEvery: 3,
+      highlightAbove: significantCutoff,
+      deploymentMarker: "2024-01-01",
+      deploymentLabel: "Jan 2024",
+      shadeFromDeployment: true,
+      labelEvery: 1,
+      fullMonthLabels: true,
+      showPointLabels: true,
     }
   );
   drawLineChart(
@@ -483,8 +548,11 @@ function render(payload) {
       thresholds: numericValue(payload.p0_minimum) !== null
         ? [{ value: numericValue(payload.p0_minimum), color: "#c53b32" }]
         : [],
-      developmentUntil: "2023-12-31",
-      labelEvery: 3,
+      deploymentMarker: "2024-01-01",
+      deploymentLabel: "Jan 2024",
+      labelEvery: 1,
+      fullMonthLabels: true,
+      showPointLabels: true,
     }
   );
   drawBarChart(document.querySelector("#csiChart"), payload.drift || [], significantCutoff);

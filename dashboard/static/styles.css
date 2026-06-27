@@ -407,7 +407,7 @@ button { padding: 0 16px; color: var(--ink); cursor: pointer; }
 
 .main-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 12px;
 }
@@ -419,10 +419,25 @@ button { padding: 0 16px; color: var(--ink); cursor: pointer; }
 
 canvas {
   width: 100%;
-  height: 300px;
+  height: 285px;
   display: block;
 }
 #csiChart { height: 285px; }
+
+.chart-footnote {
+  margin-top: 10px;
+  padding: 9px 11px;
+  color: #557092;
+  font-size: 11px;
+  line-height: 1.35;
+  background: #f5f9ff;
+  border: 1px solid #d9e6f7;
+  border-radius: 7px;
+}
+
+.confusion-panel {
+  grid-column: 1 / -1;
+}
 
 .legend {
   display: flex;
@@ -618,7 +633,6 @@ td:not(:first-child), th:not(:first-child) { text-align: right; }
 @media (max-width: 1280px) {
   .decision-card,
   .top-grid,
-  .main-grid,
   .bottom-grid {
     grid-template-columns: 1fr;
   }

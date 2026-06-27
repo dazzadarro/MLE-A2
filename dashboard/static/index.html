@@ -155,7 +155,7 @@
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">Stability</p>
-                <h2>PSI over time</h2>
+                <h2>Population Stability Index (PSI) over time</h2>
               </div>
               <div class="legend">
                 <span><i class="amber"></i>PSI</span>
@@ -164,13 +164,14 @@
               </div>
             </div>
             <canvas id="psiChart"></canvas>
+            <p class="chart-footnote">Monitoring shown for deployed prediction months. PSI is compared against watch and significant-drift thresholds.</p>
           </article>
 
           <article id="performance-section" class="panel chart-panel">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">Performance</p>
-                <h2>P0 and P1 over time</h2>
+                <h2>Performance over time (deployed period only)</h2>
               </div>
               <div class="legend">
                 <span><i class="blue"></i>Recall</span>
@@ -179,6 +180,7 @@
               </div>
             </div>
             <canvas id="performanceChart"></canvas>
+            <p class="chart-footnote">Threshold used: Recall >= 0.70. PR-AUC is tracked as the ranking metric.</p>
           </article>
 
           <article class="panel confusion-panel">
