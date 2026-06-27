@@ -10,7 +10,7 @@ logs/
 .DS_Store
 datamart/
 work/
-for claude/
+external_review/
 node_modules/
 *.tmp
 ~$*.pptx

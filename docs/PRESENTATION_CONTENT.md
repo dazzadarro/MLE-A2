@@ -297,7 +297,7 @@ Best validation candidates by family:
 
 | Family | Best candidate | Validation recall | Validation PR-AUC | Governance score |
 |---|---|---:|---:|---:|
-| Histogram Gradient Boosting | compact, all features | 0.769 | 0.654 | 0.640 |
+| Histogram Gradient Boosting | governed HGB champion | 0.769 | 0.654 | 0.640 |
 | Random Forest | depth 12, leaf 5, top 40 | 0.769 | 0.636 | 0.629 |
 | XGBoost | depth 4, lr 0.03, top 60 | 0.727 | 0.644 | 0.626 |
 | Logistic Regression | C=3.0, all features | 0.706 | 0.549 | 0.545 |
@@ -471,7 +471,7 @@ Known limitations:
 first, controlled refresh second, automated replacement only after governance is
 met.
 
-## Diagram Guidance for Claude or Manual PPT Rendering
+## Diagram Guidance for Manual PPT Rendering
 
 Use a clean left-to-right architecture diagram with the same visual language as
 the dashboard: navy headers, white cards, gold highlights and green/red status

@@ -149,7 +149,7 @@ function displayRawModelName(raw) {
   const cleaned = String(raw)
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
-  if (cleaned.toLowerCase().includes("hist gradient")) return "HGB Compact";
+  if (cleaned.toLowerCase().includes("hist gradient")) return "HGB Champion";
   if (cleaned.toLowerCase().includes("xgboost")) return "XGBoost";
   if (cleaned.toLowerCase().includes("random forest")) return "Random Forest";
   if (cleaned.toLowerCase().includes("logistic regression")) return "Logistic Regression";

@@ -122,8 +122,9 @@ score after small model-complexity and feature-count penalties before
 `champion_model.pkl` is replaced. Routine Airflow backfills reuse the current
 governed champion so historical monthly scoring remains fast and reproducible.
 Controlled challenger evaluation is run through `python main.py`,
-`scripts/train_model.py`, or `scripts/ensure_champion.py --force-refresh` when
-the governance SOP calls for a model refresh. Inference never selects an
+`python scripts/train_model.py`, or
+`python scripts/ensure_champion.py --force-refresh` when the governance SOP
+calls for a model refresh. Inference never selects an
 arbitrary file: it loads the governed champion pointer and records its model
 version with every prediction.
 

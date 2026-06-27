@@ -315,7 +315,7 @@ def main() -> None:
         draw,
         (890, 645, 1240, 785),
         "Champion",
-        "HGB Compact\nvalidation recall 0.769\nvalidation PR-AUC 0.654",
+        "HGB Champion\nvalidation recall 0.769\nvalidation PR-AUC 0.654",
         COLORS["green"],
         fill=COLORS["soft_green"],
     )
