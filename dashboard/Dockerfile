@@ -5,8 +5,8 @@ COPY dashboard/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY dashboard /app/dashboard
-COPY datamart /app/datamart
 COPY model_bank /app/model_bank
+RUN mkdir -p /app/datamart
 
 ENV PROJECT_ROOT=/app
 ENV PORT=8050
