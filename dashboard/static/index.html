@@ -151,22 +151,6 @@
         </section>
 
         <section class="main-grid">
-          <article id="stability-section" class="panel chart-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Stability</p>
-                <h2>Population Stability Index (PSI) over time</h2>
-              </div>
-              <div class="legend">
-                <span><i class="amber"></i>PSI</span>
-                <span><i class="watch-line"></i><span id="psiWatchLabel">Watch</span></span>
-                <span><i class="alert-line"></i><span id="psiAlertLabel">Significant</span></span>
-              </div>
-            </div>
-            <canvas id="psiChart"></canvas>
-            <p class="chart-footnote">Monitoring shown for deployed prediction months. PSI is compared against watch and significant-drift thresholds.</p>
-          </article>
-
           <article id="performance-section" class="panel chart-panel">
             <div class="panel-heading">
               <div>
@@ -181,6 +165,22 @@
             </div>
             <canvas id="performanceChart"></canvas>
             <p class="chart-footnote">Threshold used: Recall >= 0.70. PR-AUC is tracked as the ranking metric.</p>
+          </article>
+
+          <article id="stability-section" class="panel chart-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Stability</p>
+                <h2>Population Stability Index (PSI) over time</h2>
+              </div>
+              <div class="legend">
+                <span><i class="amber"></i>PSI</span>
+                <span><i class="watch-line"></i><span id="psiWatchLabel">Watch</span></span>
+                <span><i class="alert-line"></i><span id="psiAlertLabel">Significant</span></span>
+              </div>
+            </div>
+            <canvas id="psiChart"></canvas>
+            <p class="chart-footnote">Monitoring shown for deployed prediction months. PSI is compared against watch and significant-drift thresholds.</p>
           </article>
 
           <article class="panel confusion-panel">
